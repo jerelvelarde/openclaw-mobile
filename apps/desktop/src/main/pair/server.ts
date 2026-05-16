@@ -19,8 +19,8 @@
 // re-pair). Approved devices persist via `DeviceStore`.
 
 import { randomBytes, randomUUID } from 'node:crypto';
-import Fastify, { FastifyInstance } from 'fastify';
-import { DEFAULT_TOKEN_TTL_MS, issueToken } from './token';
+import Fastify, { FastifyInstance, FastifyRequest } from 'fastify';
+import { DEFAULT_TOKEN_TTL_MS, issueToken, verifyToken, type PairingClaim } from './token';
 import { DeviceStore } from './store';
 import type { SigningKey } from './keypair';
 
@@ -77,6 +77,32 @@ interface PairRequestBody {
 
 interface PairStatusQuery {
   pair_id?: unknown;
+}
+
+interface PushTokenParams {
+  id: string;
+}
+
+interface PushTokenBody {
+  token?: unknown;
+  platform?: unknown;
+}
+
+/**
+ * Pull the compact `claim.signature` bearer token off a fastify request.
+ * Mirrors the WS server's extractor; we accept `?token=` as a fallback
+ * for environments that can't set Authorization headers.
+ */
+function extractBearer(req: FastifyRequest): string | null {
+  const auth = req.headers['authorization'];
+  if (typeof auth === 'string') {
+    const m = /^Bearer\s+(\S+)/i.exec(auth);
+    if (m) return m[1] ?? null;
+  }
+  const query = req.query as Record<string, unknown> | undefined;
+  const q = query?.['token'];
+  if (typeof q === 'string' && q.length > 0) return q;
+  return null;
 }
 
 /** Generate a 6-digit zero-padded numeric code. */
@@ -246,6 +272,52 @@ export function buildPairingServer(opts: BuildServerOptions): PairingServer {
     }
     return { status: 'pending' as const };
   });
+
+  // POST /devices/:id/push-token — P08B step 5.
+  //
+  // Mobile POSTs its Expo push token after pairing completes. The route
+  // is bearer-authenticated against the *same* signing key as the WS
+  // upgrade: any device with a valid pairing token can register a
+  // token for the device id encoded in that token. Cross-device writes
+  // are rejected (claim.device_id must match the URL param) so a phone
+  // can't overwrite another phone's token.
+  fastify.post<{ Params: PushTokenParams; Body: PushTokenBody }>(
+    '/devices/:id/push-token',
+    async (req, reply) => {
+      const token = extractBearer(req);
+      if (!token) {
+        void reply.code(401);
+        return { error: 'missing bearer token' };
+      }
+      const claim: PairingClaim | null = verifyToken(opts.signingKey.publicKey, token);
+      if (!claim) {
+        void reply.code(401);
+        return { error: 'invalid token' };
+      }
+      if (claim.device_id !== req.params.id) {
+        // Same shape as 401 to avoid leaking which device ids exist.
+        void reply.code(403);
+        return { error: 'token does not match device id' };
+      }
+      const body = req.body ?? {};
+      const pushToken = typeof body.token === 'string' ? body.token : '';
+      const platformRaw = typeof body.platform === 'string' ? body.platform : '';
+      if (!pushToken) {
+        void reply.code(400);
+        return { error: 'token is required' };
+      }
+      if (platformRaw !== 'ios' && platformRaw !== 'android') {
+        void reply.code(400);
+        return { error: "platform must be 'ios' or 'android'" };
+      }
+      const ok = opts.deviceStore.setPushToken(req.params.id, pushToken, platformRaw);
+      if (!ok) {
+        void reply.code(404);
+        return { error: 'unknown device id' };
+      }
+      return { ok: true };
+    },
+  );
 
   function approve(pairId: string, now: number = Date.now()): PendingPair | null {
     const pair = pending.get(pairId);

@@ -32,6 +32,9 @@ import { attachStubGateway, type StubGateway } from './gateway/stub';
 import { registerCopilotRuntime } from './copilot/runtime';
 import { createVoiceRouter, type VoiceRouter } from './voice/router';
 import { loadWrtcDeps } from './voice/peer';
+import { createPushDeviceRegistry } from './push/devices';
+import { createPushClient, type PushClient } from './push/expoClient';
+import { attachPushDispatcher, type PushDispatcher } from './push/dispatch';
 import { IPC } from '../preload/ipc-channels';
 
 const IS_MAC = process.platform === 'darwin';
@@ -49,6 +52,8 @@ let voiceRouter: VoiceRouter | null = null;
 let settings: SettingsStore | null = null;
 let lanEnabled = true;
 let selfToken: SelfToken | null = null;
+let pushClient: PushClient | null = null;
+let pushDispatcher: PushDispatcher | null = null;
 
 // Keep the placeholder import live for typecheck without polluting runtime.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -246,6 +251,27 @@ async function bootPairing(): Promise<void> {
     selfToken = null;
   }
 
+  // ---- Push notification dispatcher (P08B) ------------------------------
+  // Subscribes to gateway events that warrant nudging the user and fans
+  // them out to every paired device with a registered Expo push token.
+  // The `expo-server-sdk` import is lazy inside `createPushClient`, so a
+  // failure to load (offline / packaging issue) downgrades the path to a
+  // no-op rather than taking the app down.
+  try {
+    pushClient = await createPushClient({
+      accessToken: process.env['EXPO_ACCESS_TOKEN'],
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[openclaw] push client unavailable; notifications disabled:', err);
+    pushClient = null;
+  }
+  pushDispatcher = attachPushDispatcher({
+    router,
+    registry: createPushDeviceRegistry(pairing.deviceStore),
+    pushClient,
+  });
+
   // ---- Bonjour ----------------------------------------------------------
   if (lanEnabled) {
     bonjour = createBonjourPublisher({
@@ -266,6 +292,13 @@ async function bootPairing(): Promise<void> {
 }
 
 async function teardownTransport(): Promise<void> {
+  try {
+    pushDispatcher?.detach();
+  } catch {
+    // ignore
+  }
+  pushDispatcher = null;
+  pushClient = null;
   try {
     await voiceRouter?.close();
   } catch {

@@ -48,6 +48,14 @@ export interface HandlerContext {
 /** Fan-out hook owned by the WS server: send `frame` to every relevant socket. */
 export type Broadcaster = (frame: InboundFrame, target?: { deviceId?: string }) => void;
 
+/**
+ * Observer for *outbound* frames — i.e. anything the desktop side emits
+ * via `router.publish` or `ctx.reply`. Used by the push dispatcher
+ * (P08B) to translate agent events into Expo notifications without
+ * fighting with the broadcaster (which the WS server owns).
+ */
+export type OutboundObserver = (frame: InboundFrame, target?: { deviceId?: string }) => void;
+
 /** Public surface of the router. */
 export interface Router {
   /**
@@ -75,6 +83,14 @@ export interface Router {
   dispatchRaw(raw: string, ctx: { deviceId: string }): string | null;
   /** Attach the WS-side broadcaster. The WS server wires this on boot. */
   setBroadcaster(fn: Broadcaster | null): void;
+  /**
+   * Register a passive observer that sees every outbound frame *before*
+   * the broadcaster runs. Multiple observers may be attached. Returns an
+   * unsubscribe fn. Used by the push dispatcher to mirror outbound
+   * frames into Expo notifications; can be re-used by future
+   * telemetry / debug tooling.
+   */
+  onOutbound(fn: OutboundObserver): () => void;
   /** Test-only: list registered topic prefixes (for assertions). */
   _topics(): string[];
 }
@@ -90,6 +106,21 @@ function matches(subscription: string, topic: string): boolean {
 export function createRouter(): Router {
   const handlers = new Map<string, Set<TopicHandler>>();
   let broadcaster: Broadcaster | null = null;
+  const outboundObservers = new Set<OutboundObserver>();
+
+  function emitOutbound(frame: InboundFrame, target?: { deviceId?: string }): void {
+    // Observers see the frame first. Errors are isolated so a misbehaving
+    // observer can't take down the WS fan-out path.
+    for (const obs of [...outboundObservers]) {
+      try {
+        obs(frame, target);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[openclaw] router outbound observer error:', err);
+      }
+    }
+    broadcaster?.(frame, target);
+  }
 
   function buildContext(deviceId: string): HandlerContext {
     return {
@@ -103,7 +134,7 @@ export function createRouter(): Router {
           payload,
           ts: overrides?.ts ?? Date.now(),
         };
-        broadcaster?.(frame, { deviceId });
+        emitOutbound(frame, { deviceId });
       },
     };
   }
@@ -148,7 +179,7 @@ export function createRouter(): Router {
         payload,
         ts: overrides?.ts ?? Date.now(),
       };
-      broadcaster?.(frame, overrides?.target);
+      emitOutbound(frame, overrides?.target);
       return frame;
     },
     dispatchRaw(raw, ctx) {
@@ -167,6 +198,12 @@ export function createRouter(): Router {
     },
     setBroadcaster(fn) {
       broadcaster = fn;
+    },
+    onOutbound(fn) {
+      outboundObservers.add(fn);
+      return () => {
+        outboundObservers.delete(fn);
+      };
     },
     _topics() {
       return [...handlers.keys()];

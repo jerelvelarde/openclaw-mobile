@@ -156,4 +156,84 @@ describe('pairing server', () => {
   it('approve() is a no-op on an unknown pair_id', () => {
     expect(h.server.approve('does-not-exist')).toBeNull();
   });
+
+  // P08B: /devices/:id/push-token route. After a phone pairs it POSTs
+  // its Expo push token; the desktop persists it on the PairedDevice
+  // record so the dispatcher can later look it up.
+  describe('POST /devices/:id/push-token', () => {
+    interface Approved {
+      deviceId: string;
+      token: string;
+    }
+
+    async function pairAndApprove(name: string): Promise<Approved> {
+      const create = await h.server.fastify.inject({
+        method: 'POST',
+        url: '/pair/request',
+        payload: { device_name: name, public_key: `pk-${name}` },
+      });
+      const { pair_id } = create.json() as { pair_id: string };
+      const approved = h.server.approve(pair_id);
+      if (!approved?.token || !approved.device_id) {
+        throw new Error('failed to approve fixture');
+      }
+      return { deviceId: approved.device_id, token: approved.token };
+    }
+
+    it('persists a token for an authenticated device', async () => {
+      const a = await pairAndApprove('Phone A');
+      const res = await h.server.fastify.inject({
+        method: 'POST',
+        url: `/devices/${a.deviceId}/push-token`,
+        headers: { Authorization: `Bearer ${a.token}` },
+        payload: { token: 'ExponentPushToken[abc]', platform: 'ios' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      const listed = h.deviceStore.listDevices().find((d) => d.device_id === a.deviceId);
+      expect(listed?.pushToken).toBe('ExponentPushToken[abc]');
+      expect(listed?.pushPlatform).toBe('ios');
+    });
+
+    it('rejects an unauthenticated request with 401', async () => {
+      const a = await pairAndApprove('Phone A');
+      const res = await h.server.fastify.inject({
+        method: 'POST',
+        url: `/devices/${a.deviceId}/push-token`,
+        payload: { token: 'ExponentPushToken[abc]', platform: 'ios' },
+      });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('rejects a request whose token belongs to a different device with 403', async () => {
+      const a = await pairAndApprove('Phone A');
+      const b = await pairAndApprove('Phone B');
+      const res = await h.server.fastify.inject({
+        method: 'POST',
+        url: `/devices/${a.deviceId}/push-token`,
+        headers: { Authorization: `Bearer ${b.token}` },
+        payload: { token: 'ExponentPushToken[abc]', platform: 'ios' },
+      });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('rejects a malformed body with 400', async () => {
+      const a = await pairAndApprove('Phone A');
+      const missing = await h.server.fastify.inject({
+        method: 'POST',
+        url: `/devices/${a.deviceId}/push-token`,
+        headers: { Authorization: `Bearer ${a.token}` },
+        payload: { platform: 'ios' },
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const badPlatform = await h.server.fastify.inject({
+        method: 'POST',
+        url: `/devices/${a.deviceId}/push-token`,
+        headers: { Authorization: `Bearer ${a.token}` },
+        payload: { token: 'ExponentPushToken[abc]', platform: 'web' },
+      });
+      expect(badPlatform.statusCode).toBe(400);
+    });
+  });
 });
