@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { encode } from '@openclaw/protocol';
 import { createRouter, type InboundFrame } from '../../transport/router';
-import { attachStubGateway } from '../stub';
+import { attachStubGateway } from '../__fixtures__/stub';
 
 function frame(topic: string, type: string, payload: unknown): string {
   return encode<unknown>({

@@ -57,6 +57,13 @@ export interface PairedDeviceView {
 export interface SettingsView {
   version: 1;
   lan_enabled: boolean;
+  /**
+   * Which gateway plumbing the desktop boots. `"stub"` keeps the legacy
+   * in-process echo gateway; `"real"` switches to the OpenClawBridge
+   * (P10A) that talks to a real `openclaw gateway` daemon over WebSocket.
+   * Restart-only.
+   */
+  gateway_mode: 'stub' | 'real';
 }
 
 /**

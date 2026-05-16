@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadOrCreateSigningKey, type SigningKey } from '../../pair/keypair';
 import { issueToken } from '../../pair/token';
 import { createRouter, type InboundFrame, type Router } from '../../transport/router';
-import { attachStubGateway, type StubGateway } from '../../gateway/stub';
+import { attachStubGateway, type StubGateway } from '../../gateway/__fixtures__/stub';
 import { registerCopilotRuntime } from '../runtime';
 import { encode } from '@openclaw/protocol';
 

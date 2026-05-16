@@ -22,13 +22,15 @@ import { join } from 'node:path';
 // as a type so tree-shaking drops it at runtime.
 import type { Agent } from '@openclaw/protocol';
 import { buildPairingController, PairingController } from './pair/controller';
+import { openKeystore } from './pair/keystore';
 import { buildRuntimeUrl, DEFAULT_PORT } from './pair/server';
 import { openSelfToken, type SelfToken } from './pair/self-token';
 import { SettingsStore } from './settings';
 import { createBonjourPublisher, type BonjourPublisher } from './transport/bonjour';
 import { createRouter, type Router } from './transport/router';
 import { attachWsServer, type WsTransport } from './transport/wsServer';
-import { attachStubGateway, type StubGateway } from './gateway/stub';
+import { attachStubGateway, type StubGateway } from './gateway/__fixtures__/stub';
+import { attachOpenClawBridge, type OpenClawBridge } from './gateway/openclaw-bridge';
 import { registerCopilotRuntime } from './copilot/runtime';
 import { createVoiceRouter, type VoiceRouter } from './voice/router';
 import { loadWrtcDeps } from './voice/peer';
@@ -47,6 +49,7 @@ let pairing: PairingController | null = null;
 let bonjour: BonjourPublisher | null = null;
 let wsTransport: WsTransport | null = null;
 let stubGateway: StubGateway | null = null;
+let openClawBridge: OpenClawBridge | null = null;
 let router: Router | null = null;
 let voiceRouter: VoiceRouter | null = null;
 let settings: SettingsStore | null = null;
@@ -195,9 +198,32 @@ async function bootPairing(): Promise<void> {
 
   await pairing.server.fastify.listen({ host, port: PORT });
 
-  // ---- WS transport + stub gateway --------------------------------------
+  // ---- WS transport + gateway plumbing ----------------------------------
+  // `gateway_mode` selects between the legacy in-process stub (default
+  // — chat/canvas/voice all served locally) and the real-gateway bridge
+  // (`OpenClawBridge` — P10A) that proxies to an installed
+  // `openclaw gateway` daemon. The flip is restart-only; see Settings.
   router = createRouter();
-  stubGateway = attachStubGateway(router);
+  if (cfg.gateway_mode === 'real') {
+    try {
+      const bridgeKeystore = await openKeystore(app.getPath('userData'));
+      openClawBridge = await attachOpenClawBridge({
+        router,
+        keystore: bridgeKeystore,
+        upstreamUrl: process.env['OPENCLAW_UPSTREAM_WS_URL'] ?? undefined,
+        bootstrapToken: process.env['OPENCLAW_UPSTREAM_BOOTSTRAP_TOKEN'] ?? undefined,
+      });
+    } catch (err) {
+      // Don't crash the app — fall back to the stub so chat keeps working
+      // and the user can see something's wrong via the Settings UI.
+      // eslint-disable-next-line no-console
+      console.error('[openclaw] real-gateway bridge failed to attach; using stub:', err);
+      openClawBridge = null;
+      stubGateway = attachStubGateway(router);
+    }
+  } else {
+    stubGateway = attachStubGateway(router);
+  }
   wsTransport = attachWsServer({
     fastify: pairing.server.fastify,
     publicKey: pairing.signingKey.publicKey,
@@ -311,6 +337,12 @@ async function teardownTransport(): Promise<void> {
     // ignore
   }
   stubGateway = null;
+  try {
+    await openClawBridge?.detach();
+  } catch {
+    // ignore
+  }
+  openClawBridge = null;
   try {
     await wsTransport?.close();
   } catch {

@@ -14,6 +14,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+/**
+ * Mode selector for the desktop's gateway plumbing. Flipping this requires
+ * an app restart — there's no live-swap. Default is `"stub"` so existing
+ * chat/canvas/voice paths keep working. `"real"` switches to the
+ * `OpenClawBridge` (P10A) which talks to a real `openclaw gateway` daemon
+ * over WebSocket; canvas/voice/setActiveAgent return a typed
+ * `unsupportedInRealMode` error in that mode until follow-up plans land.
+ */
+export type GatewayMode = 'stub' | 'real';
+
 /** Shape of the persisted JSON object. */
 export interface SettingsFile {
   version: 1;
@@ -23,13 +33,23 @@ export interface SettingsFile {
    * loopback-only and Bonjour publishing is skipped.
    */
   lan_enabled: boolean;
+  /**
+   * Which gateway implementation the desktop boots. See {@link GatewayMode}.
+   * Restart-only — there's no IPC to flip this at runtime in v1.
+   */
+  gateway_mode: GatewayMode;
 }
 
 /** Reasonable defaults applied when the file is missing or partial. */
 export const DEFAULT_SETTINGS: SettingsFile = {
   version: 1,
   lan_enabled: true,
+  gateway_mode: 'stub',
 };
+
+function coerceGatewayMode(v: unknown): GatewayMode {
+  return v === 'real' ? 'real' : DEFAULT_SETTINGS.gateway_mode;
+}
 
 function read(filePath: string): SettingsFile {
   if (!existsSync(filePath)) {
@@ -52,6 +72,7 @@ function read(filePath: string): SettingsFile {
     version: 1,
     lan_enabled:
       typeof obj.lan_enabled === 'boolean' ? obj.lan_enabled : DEFAULT_SETTINGS.lan_enabled,
+    gateway_mode: coerceGatewayMode(obj.gateway_mode),
   };
 }
 

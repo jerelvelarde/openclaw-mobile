@@ -17,7 +17,7 @@ export function Settings(): JSX.Element {
     if (!bridge) {
       // jsdom / no-preload smoke path — render defaults so the test
       // assertions still find the expected copy.
-      setSettings({ version: 1, lan_enabled: true });
+      setSettings({ version: 1, lan_enabled: true, gateway_mode: 'stub' });
       return;
     }
     void bridge.settings.get().then(setSettings);
@@ -50,6 +50,16 @@ export function Settings(): JSX.Element {
             />{' '}
             <strong>LAN exposure</strong> — when enabled, the pairing + WS server binds to
             <code> 0.0.0.0:18789</code> and advertises via Bonjour. Disabled keeps it loopback-only.
+          </label>
+        </li>
+        <li>
+          <label>
+            <strong>Gateway mode:</strong> <code>{settings.gateway_mode}</code>{' '}
+            <span aria-label="gateway mode (read-only)">
+              {settings.gateway_mode === 'real'
+                ? '— bridging to a real openclaw gateway daemon (canvas + voice disabled)'
+                : '— in-process echo stub (default; full chat/canvas/voice surfaces)'}
+            </span>
           </label>
         </li>
       </ul>
