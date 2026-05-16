@@ -57,6 +57,12 @@ function buildFakeRouter() {
     setBroadcaster(fn) {
       _bc = fn;
     },
+    onOutbound() {
+      // Not exercised by the adapter; return a no-op unsubscribe.
+      return (): void => {
+        // ignore
+      };
+    },
     _topics() {
       return [...handlers.keys()];
     },

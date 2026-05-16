@@ -14,6 +14,12 @@ import { dirname, join } from 'node:path';
  * Record of one approved device. Field names use snake_case to match the
  * shape we serialise in `devices.json` and the on-wire protocol used by
  * `server.ts`; this keeps the JSON round-trip free of remapping logic.
+ *
+ * P08B extends the record with the two optional push-notification
+ * fields. They're written by `setPushToken` (driven by mobile registering
+ * its Expo token after pairing) and read by the dispatch module to fan
+ * out notifications. Older `devices.json` files that predate P08B are
+ * forward-compatible: the optional fields simply read as `undefined`.
  */
 export interface PairedDevice {
   /** Stable id assigned by the desktop at approval time. */
@@ -24,6 +30,15 @@ export interface PairedDevice {
   paired_at: number;
   /** Epoch ms of the last time we saw a successful auth from this device. */
   last_seen: number;
+  /**
+   * Expo push token (`ExponentPushToken[...]` / `ExpoPushToken[...]`)
+   * registered by mobile via `POST /devices/:id/push-token`. Absent until
+   * the device has reported one — the dispatcher silently skips devices
+   * without a token.
+   */
+  pushToken?: string;
+  /** Platform that produced the token. Helps tune per-OS payloads later. */
+  pushPlatform?: 'ios' | 'android';
 }
 
 interface DeviceFile {
@@ -98,5 +113,31 @@ export class DeviceStore {
     if (!device) return;
     device.last_seen = now;
     write(this.filePath, file);
+  }
+
+  /**
+   * Persist the Expo push token mobile registered post-pairing. No-op if
+   * the device id is unknown (caller already rejected with 404 in that
+   * case). Passing `null` for `token` clears both fields, which is how
+   * we revoke a token when Expo tells us it's no longer valid (e.g. the
+   * user uninstalled the app).
+   */
+  setPushToken(
+    deviceId: string,
+    token: string | null,
+    platform: 'ios' | 'android' | null = null,
+  ): boolean {
+    const file = read(this.filePath);
+    const device = file.devices.find((d) => d.device_id === deviceId);
+    if (!device) return false;
+    if (token === null) {
+      delete device.pushToken;
+      delete device.pushPlatform;
+    } else {
+      device.pushToken = token;
+      if (platform) device.pushPlatform = platform;
+    }
+    write(this.filePath, file);
+    return true;
   }
 }
