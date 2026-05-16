@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "OpenClaw",
+    "slug": "openclaw-mobile",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "scheme": "openclaw",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.openclaw.mobile"
+    },
+    "android": {
+      "package": "com.openclaw.mobile",
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

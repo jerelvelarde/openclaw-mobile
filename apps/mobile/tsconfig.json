@@ -1,9 +1,31 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "dist",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "types": ["jest", "node"],
+    "paths": {
+      "@/*": ["./*"],
+      "@openclaw/protocol": ["../../packages/protocol/src"],
+      "@openclaw/protocol/*": ["../../packages/protocol/src/*"]
+    },
     "noEmit": true
   },
-  "include": ["src/**/*"]
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "__tests__/**/*.ts",
+    "__tests__/**/*.tsx",
+    "jest-setup.ts",
+    "metro.config.js",
+    "babel.config.js",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "exclude": ["node_modules", ".expo", "dist", "build", "web-build"]
 }
