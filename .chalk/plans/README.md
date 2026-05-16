@@ -63,6 +63,12 @@ The orchestrator should send a sub-agent prompt like:
 - Plans never edit other plans, `master-plan.md`, or `plan.md`. If a plan reveals new info, the executor writes findings to `open-questions.md` instead.
 - Each plan owns one commit. If a plan grows to multiple commits, it should have been split.
 - Plans are **idempotent**: re-running a plan on a clean tree should produce the same diff.
+- **Always-run baseline gates** (in addition to per-plan Verification). Sub-agents MUST run these before committing, even when the per-plan Verification doesn't list them, because CI gates on them:
+  - `pnpm install` — no resolution churn.
+  - `pnpm format:check` — Prettier-clean across all touched files.
+  - `pnpm -r typecheck` — TS clean across all workspaces.
+  - `pnpm -r lint` — passes (stubs are echo-only until per-app ESLint lands).
+  - `pnpm -r test` — passes (stubs are echo-only until per-app tests land).
 
 ## Adding new plans
 

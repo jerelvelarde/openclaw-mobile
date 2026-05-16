@@ -79,6 +79,9 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 16. **`tsup` DTS + `composite: true` interaction** `[root]`
     - P01A wanted `packages/protocol/tsconfig.json` to set `composite: true`. With that flag set, `tsup`'s DTS step (via rollup-plugin-dts) reports TS6307 because its synthesized virtual project doesn't honor the `include` glob. We worked around it by adding a sibling `packages/protocol/tsconfig.build.json` (same options minus `composite`) and pointing `tsup.config.ts` at it. If we later add more workspace packages that all need composite + DTS, consider standardizing on this pattern (or switching the DTS step to `tsc -b` once we wire up project references). Revisit when P01B / per-package CI lands.
 
+17. **Sub-agent verification baseline** `[process]`
+    - Per-plan Verification sections list app-specific gates but sometimes omit repo-wide gates (notably `pnpm format:check`). Wave 2 surfaced this: P01A passed its plan's verification but failed CI's format gate after merge. Fixed by reformatting in a follow-up commit (`e8be21c`) and codifying the baseline in `.chalk/plans/README.md` — sub-agents now must run install / format:check / -r typecheck / -r lint / -r test regardless of per-plan Verification. Revisit if we add more gates (security audit, bundle-size budgets, etc.).
+
 ---
 
 ## B. Decisions we can make as we go
