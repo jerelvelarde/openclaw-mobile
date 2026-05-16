@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Stub. Real Expo scaffolding lands in plan P02A.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "echo '[mobile] lint stub — real config lands in P02A' && exit 0",
+    "test": "echo '[mobile] no tests yet — landing in P02A' && exit 0"
+  }
+}

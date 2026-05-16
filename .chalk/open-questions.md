@@ -73,6 +73,9 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 14. **`@openclaw/` npm scope** `[root]`
     - We use `@openclaw/protocol`, `@openclaw/mobile`, `@openclaw/desktop` as workspace names. If we ever publish `@openclaw/protocol`, we need to claim the scope on npm. Defer until publish.
 
+15. **Prettier scope vs. planning docs** `[root]`
+    - P00 added `.chalk/` to `.prettierignore` so the per-task plan files (which are owned by the planning process and which sub-agents are told not to edit) don't fail `pnpm format:check`. If we later want Prettier to enforce style on the planning docs too, we'd need a separate "format-planning-docs" workflow or to relax the don't-edit rule for sub-agents. Revisit once the planning docs stabilize.
+
 ---
 
 ## B. Decisions we can make as we go

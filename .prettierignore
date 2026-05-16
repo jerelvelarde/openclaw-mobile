@@ -1,0 +1,10 @@
+node_modules/
+dist/
+build/
+out/
+coverage/
+.expo/
+pnpm-lock.yaml
+
+# Planning docs — owned by the planning process, not by Prettier.
+.chalk/

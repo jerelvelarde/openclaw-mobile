@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Stub. Shared wire types / Zod schemas / GatewayClient interface land in plan P01A.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "echo '[protocol] build stub — real config lands in P01A' && exit 0",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "echo '[protocol] lint stub — real config lands in P01A' && exit 0",
+    "test": "echo '[protocol] no tests yet — landing in P01A' && exit 0"
+  }
+}
