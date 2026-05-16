@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Agent, CanvasSurface, Message, ThreadEvent } from '@openclaw/protocol';
+import { CANVAS_SCHEMA_VERSION } from '@openclaw/protocol';
 import type { Router } from '../transport/router';
 
 /** Fake agents — same ids as `InMemoryMockGateway`'s defaults. */
@@ -142,14 +143,28 @@ export function attachStubGateway(router: Router, opts: StubOptions = {}): StubG
         // surface event so renderer Canvas plumbing has something to
         // render in dev. Real surface schema lands in P06.0.
         if (content.toLowerCase().includes(CANVAS_TRIGGER)) {
+          const surfaceId = `surface_${randomUUID()}`;
           const surface: CanvasSurface = {
-            id: `surface_${randomUUID()}`,
-            title: 'Canvas (stub)',
-            content: {
-              kind: 'note',
-              body: `Triggered by message: ${content}`,
+            id: surfaceId,
+            version: CANVAS_SCHEMA_VERSION,
+            root: {
+              type: 'stack',
+              id: `${surfaceId}_root`,
+              direction: 'vertical',
+              children: [
+                {
+                  type: 'heading',
+                  id: `${surfaceId}_title`,
+                  text: 'Canvas (stub)',
+                  level: 1,
+                },
+                {
+                  type: 'text',
+                  id: `${surfaceId}_body`,
+                  text: `Triggered by message: ${content}`,
+                },
+              ],
             },
-            updatedAt: Date.now(),
           };
           ctx.reply('canvas.surface', surface);
         }

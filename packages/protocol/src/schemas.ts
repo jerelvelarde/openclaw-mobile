@@ -82,20 +82,9 @@ export const ThreadEventSchema = z.discriminatedUnion('type', [
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEventSchema>;
 
-export const CanvasSurfaceSchema = z.object({
-  id: z.string().min(1),
-  title: z.string(),
-  content: z.unknown(),
-  updatedAt: z.number().int().nonnegative(),
-});
-export type CanvasSurface = z.infer<typeof CanvasSurfaceSchema>;
-
-export const CanvasPatchSchema = z.object({
-  surfaceId: z.string().min(1),
-  patch: z.unknown(),
-  ts: z.number().int().nonnegative(),
-});
-export type CanvasPatch = z.infer<typeof CanvasPatchSchema>;
+// `CanvasSurfaceSchema` + `CanvasPatchSchema` live in `./canvas/schemas.ts` as
+// of P06.0. They are re-exported from `./index.ts` so consumers see the same
+// import path they did before.
 
 export const VoiceOptsSchema = z.object({
   mode: z.enum(['ptt', 'continuous']),

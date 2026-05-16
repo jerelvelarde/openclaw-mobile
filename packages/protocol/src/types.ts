@@ -103,29 +103,9 @@ export type ThreadEvent =
       messageId: string;
     };
 
-/** Agent-driven UI fragment rendered inline in chat or full-screen. */
-export interface CanvasSurface {
-  id: string;
-  /** Display title shown in the surface header. */
-  title: string;
-  /**
-   * Opaque schema-driven content. Locked down in plan P06.0
-   * (see `.chalk/plans/P06.0-canvas-schema.md`); for now the protocol package
-   * just transports it verbatim.
-   */
-  content: unknown;
-  /** Epoch ms; monotonic per surface so clients can drop stale updates. */
-  updatedAt: number;
-}
-
-/** Incremental update to an existing `CanvasSurface`. */
-export interface CanvasPatch {
-  surfaceId: string;
-  /** Partial replacement for `content`. */
-  patch: unknown;
-  /** Epoch ms. */
-  ts: number;
-}
+// `CanvasSurface` + `CanvasPatch` live in `./canvas/types.ts` as of P06.0.
+// They are re-exported from `./index.ts` so consumers see the same import
+// path they did before.
 
 /** Caller options for opening a voice session. */
 export interface VoiceOpts {
