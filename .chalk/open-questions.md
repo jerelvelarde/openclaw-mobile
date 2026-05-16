@@ -24,16 +24,20 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 
 ## A. Blockers before code past M2
 
-1. **OpenClaw WS / "device node" protocol** `[both]`
-   - Exact pairing handshake (token issuance, refresh, revocation).
-   - Wire format for messages (JSON-RPC? Custom envelope?).
-   - Topic/subscription model for threads, agents, Canvas, voice.
-   - Heartbeats / reconnect semantics.
-   - We will read this from the OpenClaw source before starting M2 — or, if it's not finalized, propose the schema and PR it back upstream. The desktop app's protocol-side surface freezes the answer for mobile.
+1. **OpenClaw WS / "device node" protocol** `[both]` — **RESOLVED in P10.0.**
+   - Spec captured in `.chalk/openclaw-upstream.md`; deltas vs `@openclaw/protocol` in `.chalk/openclaw-deltas.md`.
+   - Wire format is a JSON-RPC-style discriminated union: `req`/`res`/`event` frames (`/tmp/upstream-openclaw/src/gateway/protocol/schema/frames.ts:138–177`), not the `{ id, topic, type, payload, ts }` envelope we ship. `topic` does not exist upstream; dispatch is by `method` (RPC) or `event` (server-pushed).
+   - Pairing is bootstrap-token + Ed25519-signed `connect` over a server-issued nonce challenge — there's no `POST /pair/request` HTTP endpoint and no polling. The DM "6-digit code" idiom upstream is a sender-allowlist code, not a TOTP-style pairing code.
+   - Topics we collapse into upstream methods: `threads.*` → `chat.*` + `sessions.*`; `agents.*` → `agents.list` (set-active is our invention; upstream sessions are per-agent already); `canvas.*` → `extensions/canvas` HTML/WebView surface (totally different model — see #36); `voice.*` → `talk.*` with base64 PCM inside JSON.
+   - Heartbeats are server-emitted `event:"tick" payload:{ ts }` at `HelloOk.policy.tickIntervalMs` (no client ping required). Graceful shutdown: `event:"shutdown"`.
+   - Reconnects re-run the connect handshake with `auth:{ deviceToken }` (skipping the bootstrap step). The Ed25519 keypair is per-device, kept in the secure store; the deviceToken is issued by the gateway at first connect.
+   - **Action:** P10A wires the bridge to translate; P10B aligns `@openclaw/protocol`.
 
-2. **`openclaw-desktop` repo ownership** `[desktop]`
-   - Does OpenClaw upstream want the Electron supervisor contributed back, or is `openclaw-desktop` a separate community project?
-   - Who creates and maintains the repo? Mobile development past M2 assumes it exists.
+2. **`openclaw-desktop` repo ownership** `[desktop]` — **DISCUSSED in P10.0.**
+   - Upstream has no "Electron supervisor" concept, but does ship native node clients at `apps/{ios,android,macos}/` (SwiftUI / Kotlin). The supervisor role is implicit: the daemon is supposed to be launched via `openclaw onboard --install-daemon` (`launchd` / `systemd --user` / Windows service) — see `openclaw-upstream.md` §1.1. There is no opening for a "supervise from another process" hook today.
+   - The cleanest PR-back path for our Electron app would be (a) as a contributor-maintained sibling repo under the openclaw GitHub org, or (b) as a thin `extensions/macos-supervisor` extension that wraps `openclaw gateway` lifecycle hooks. Option (b) keeps Electron out of the upstream tree; option (a) is a separate community project.
+   - Did not surface an upstream maintainer comment opposing or endorsing either; assume the conversation has to start fresh with a P10D pitch. For now: keep building `apps/desktop` in our monorepo, design it so it could become a sibling repo without major changes.
+   - **Action:** ship the desktop as part of `openclaw-mobile` monorepo (no rename in v1), pitch the org-sibling repo path in P10D. Don't block on the answer.
 
 3. **CopilotKit runtime placement** `[desktop]`
    - Does the OpenClaw gateway already speak the CopilotKit runtime protocol on some path (e.g. `/copilot/runtime`)?
@@ -58,8 +62,11 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 9. **Code-signing / notarization** `[desktop]`
    - Apple Developer account, Windows code-signing cert, Linux packaging. Affects whether we ship a real `.dmg` vs. an `npm install -g` story.
 
-10. **Hermes-as-agent wiring** `[both]`
-    - How exactly does Hermes register itself as an agent route inside OpenClaw? Is `hermes claw migrate` one-shot, or does Hermes run as a sibling daemon the gateway routes to? Affects whether `listAgents()` shows Hermes as one entry or many.
+10. **Hermes-as-agent wiring** `[both]` — **CLARIFIED in P10.0.**
+    - `hermes claw migrate` is **one-shot**: it's a Python migration script (`/tmp/upstream-hermes/optional-skills/migration/openclaw-migration/scripts/openclaw_to_hermes.py`) launched via `/tmp/upstream-hermes/hermes_cli/claw.py` that copies SOUL.md / agent files / config / optional secrets from `~/.openclaw/` into `~/.hermes/`. It does **not** wire Hermes as a live route inside OpenClaw.
+    - Live integration goes through **ACP** (Zed's Agent Client Protocol). Hermes ships `acp_adapter/server.py` exposing an `acp.Agent` server (`/tmp/upstream-hermes/acp_adapter/server.py:441`); OpenClaw consumes ACP via `src/acp/client.ts` + the `extensions/acpx` extension. OpenClaw spawns Hermes as an **ACP child process** (line-delimited JSON-RPC over stdio).
+    - Therefore `listAgents()` shows Hermes as **one entry** (the configured `AgentSummary` for the Hermes adapter), not many. Each call routed to that agent spawns/talks-to the ACP child.
+    - **Action:** mobile treats Hermes as a normal `agents.list` entry. Desktop's "install Hermes" affordance (later) just needs to add Hermes to the OpenClaw agents config and supervise the ACP child if it's not auto-spawned. Tracked but out-of-scope for v1 mobile.
 
 11. **Branding / naming** `[both]`
     - Display name, bundle id (e.g. `dev.openclaw.mobile`, `dev.openclaw.desktop`), icon, color tokens.
@@ -135,6 +142,31 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 
 35. **Notification trigger contract — `task_finished` + agent-originated voice offers** `[desktop]` `[mobile]` `[protocol]`
     - P08B's dispatcher needs two outbound frame shapes that don't yet exist as first-class protocol concepts: (a) a "long task finished" event distinct from `ThreadEvent.done`, and (b) an agent-originated voice offer distinct from a phone-initiated PTT offer. For v1 we approximated both: `ThreadEvent.done` doubles as the "task finished" trigger (the dispatcher gates it through the same per-thread throttle, so a typical `message` → `done` sequence collapses to a single push), and voice-offer signals are filtered on `payload.from === 'agent'` (a contract that does not exist anywhere in `@openclaw/protocol` today — no agent actually sets it). The stub gateway never trips the voice path because it only echoes phone offers, so the agent-originated branch is effectively dead code until a real agent + the protocol bits land. Decide before pre-release: (a) add a `tasks.finished` topic (or a `ThreadEvent` `{ type: "task_finished", taskId }` variant) so the dispatcher has a real signal to subscribe to, and (b) extend `VoiceSignal` with a `from: "agent" | "user"` discriminator in `@openclaw/protocol/voice/types.ts` so the dispatcher's filter is contract-backed instead of guessing. Until then the only push that actually fires in production is "assistant message", which is the path mobile P08A will exercise first anyway.
+
+36. **Canvas: tree-of-nodes vs HTML/WebView** `[mobile]` `[desktop]` `[protocol]` — surfaced by P10.0.
+    - Upstream Canvas (`extensions/canvas/src/host/a2ui-shared.ts`, `skills/canvas/SKILL.md`) is **a WebView surface**: the gateway serves arbitrary HTML/CSS/JS from `canvasHost.root` over a port (default 18793, `/__openclaw__/canvas/<file>.html?oc_cap=<token>`), nodes load it in a WebView, and the page posts user-actions back through an injected JS bridge (`window.OpenClaw.sendUserAction({...})`). "Live updates" are coarse: a `"reload"` string broadcast on `/__openclaw__/ws` triggers a full re-fetch. The action message shape is **A2UI** (Google's Agent-to-UI protocol).
+    - We invented `CanvasSurface` (a tree of `Stack`/`Heading`/`Text`/`Button`/`TextInput`/`Select`/`List` nodes) + `CanvasPatch` ops (`AddNode`/`RemoveNode`/`ReplaceProps`/`SetText`) + a typed `CanvasEvent`. None of that exists upstream.
+    - Two paths for v1: (a) **adopt upstream:** mobile renders a WebView and intercepts the A2UI bridge messages; our schema-driven renderer becomes desktop-only or is retired. (b) **stay schema-driven:** the desktop bridge translates upstream's WebView Canvas into our node tree (effectively a tiny HTML→tree compiler) so the existing mobile renderer keeps working; agents that emit raw HTML can't be rendered on mobile without a fallback. Option (a) is honest about upstream reality but throws away the accessibility / non-WebView story our renderer enables; option (b) keeps mobile parity with desktop but is a perpetual translation burden. Floated as PR-back #1 (`openclaw-upstream.md` §13) to land both upstream so each consumer picks.
+    - **Action:** decide before P10A wraps. Either way, P10A's bridge wires `canvas.*` topics to upstream's WebView surface — translation choice is local to the desktop. P10B's protocol refresh either keeps our tree or replaces it with a WebView descriptor (`{ url, cap, refreshTopic }`). Resolves delta E1/E2/E3/E4.
+
+37. **Node-as-device callback surface** `[mobile]` `[desktop]` `[protocol]` — surfaced by P10.0.
+    - Upstream treats the mobile app as a **"node"** — once paired, the gateway can ask the device to run commands. Specifically: `event:"node.invoke.request"` with `{ id, nodeId, command, paramsJSON?, timeoutMs?, idempotencyKey? }` (`/tmp/upstream-openclaw/src/gateway/protocol/schema/nodes.ts:197–207`), to which the device must reply via `req method:"node.invoke.result" { id, nodeId, ok, payload? | payloadJSON?, error? }` (`nodes.ts:118–136`). Plus unsolicited `req method:"node.event"` (`nodes.ts:138–145`) for telemetry, and `node.pending.{drain,pull,ack,enqueue}` for "things to do while backgrounded" (work types: `status.request` / `location.request`).
+    - Our `GatewayClient` interface (`packages/protocol/src/client.ts:53–116`) only models "I am a client that sends requests and consumes events" — it has **no surface for handling inbound invocations** from the gateway. Mobile can't currently respond to "take a screenshot", "send my current location", "open this canvas URL".
+    - **Action (P10B):** add a `handleNodeInvoke(command, handler)` registration + a `sendNodeEvent(event, payload)` outbound method to `GatewayClient`. Bridge implementation translates `event:"node.invoke.request"` → handler dispatch → `node.invoke.result` reply. v1 mobile handlers: at minimum a no-op acknowledger so the gateway doesn't time out; full implementation of `status.request` / `location.request` is post-v1. Without this, paired mobile devices are read-only consumers, which upstream did not design around.
+
+38. **Adopt `HelloOk.features` capability discovery** `[mobile]` `[desktop]` `[protocol]` — surfaced by P10.0.
+    - Upstream's `HelloOk` reply to the connect RPC includes `features: { methods: string[], events: string[] }` (`/tmp/upstream-openclaw/src/gateway/protocol/schema/frames.ts:84–90`), letting the client gate UI on what the gateway actually supports (e.g. a gateway without the `extensions/canvas` extension wouldn't advertise canvas methods).
+    - Today our apps gate UI on hard-coded assumptions. Once the bridge connects to a real gateway, UI affordances should appear/disappear based on `features`.
+    - **Action:** defer until needed. Bridge stores `features` after connect; expose via `GatewayClient.capabilities()` (or similar) in P10B if/when a UI element needs to gate on it. Not a v1 blocker.
+
+39. **`setActiveAgent` doesn't map to anything upstream** `[mobile]` `[desktop]` `[protocol]` — surfaced by P10.0.
+    - Our `GatewayClient.setActiveAgent(agentId)` (`packages/protocol/src/client.ts:84`) assumes a per-device "default agent" routing. Upstream has no such concept: each session belongs to one agent (sessions are keyed by agent + scope, see `src/agents/agent-scope.ts`), so the "active agent" choice happens at thread-creation time, not at device level.
+    - **Action (P10B):** remove `setActiveAgent` from `GatewayClient`. Mobile picks an agent when it opens a new thread; the agent id is baked into the `sessionKey`. Existing UI (the Agents tab) becomes a list view, not a "switch active" affordance. Threads already display per-agent. Touches `apps/mobile/app/(tabs)/agents.tsx` (currently triggers `setActiveAgent`) — re-scope it to "pick agent for next thread".
+
+40. **Pairing UX — keep our 6-digit code or adopt upstream's QR/setup-link?** `[mobile]` `[desktop]` — surfaced by P10.0.
+    - Upstream pairing is "bootstrap token + setup URL handed out-of-band" (`/tmp/upstream-openclaw/src/pairing/setup-code.ts:380–407`). The DM channels (Telegram, Discord, etc.) render a QR via `extensions/device-pair/qr-image.ts` carrying the bootstrap token. There is no symmetric "show 6 digits on phone, type into desktop" flow.
+    - Our v1 UX (`apps/mobile/app/(pairing)/code.tsx` + `apps/desktop/src/main/pair/server.ts`) is a TOTP-style 6-digit code matched in the desktop UI. It's a better UX for the LAN-discovery scenario (you literally see the desktop next to the phone).
+    - **Action:** keep our 6-digit flow as the **desktop-driven** path. The bridge generates a bootstrap token on the desktop side when the user clicks "Approve", then hands the token to the WS connect machinery — mobile UX is unchanged. Pitch our 6-digit code idiom as PR-back #3 (`openclaw-upstream.md` §13) so other front-ends can adopt it via `extensions/device-pair`. Resolves delta B1.
 
 ---
 
