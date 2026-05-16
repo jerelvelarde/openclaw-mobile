@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import type { Agent } from '@openclaw/protocol';
 import { buildPairingController, PairingController } from './pair/controller';
 import { buildRuntimeUrl, DEFAULT_PORT } from './pair/server';
+import { openSelfToken, type SelfToken } from './pair/self-token';
 import { SettingsStore } from './settings';
 import { createBonjourPublisher, type BonjourPublisher } from './transport/bonjour';
 import { createRouter, type Router } from './transport/router';
@@ -44,6 +45,7 @@ let stubGateway: StubGateway | null = null;
 let router: Router | null = null;
 let settings: SettingsStore | null = null;
 let lanEnabled = true;
+let selfToken: SelfToken | null = null;
 
 // Keep the placeholder import live for typecheck without polluting runtime.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -90,18 +92,6 @@ function getMainWindow(): BrowserWindow | null {
   return mainWindow;
 }
 
-function toggleMainWindow(): void {
-  if (!mainWindow) {
-    mainWindow = createMainWindow();
-  }
-  if (mainWindow.isVisible()) {
-    mainWindow.hide();
-  } else {
-    mainWindow.show();
-    mainWindow.focus();
-  }
-}
-
 function showWindowOnRoute(route: string): void {
   if (!mainWindow) {
     mainWindow = createMainWindow();
@@ -115,7 +105,9 @@ function buildTrayMenu(): Electron.Menu {
   const lanLabel = `LAN: ${lanEnabled ? 'enabled' : 'disabled'}`;
   const bonjourLabel = `Bonjour: ${bonjour?.state === 'advertising' ? 'advertising' : 'idle'}`;
   return Menu.buildFromTemplate([
-    { label: 'Show', click: toggleMainWindow },
+    { label: 'Show', click: () => showWindowOnRoute('/chat') },
+    { label: 'Chat', click: () => showWindowOnRoute('/chat') },
+    { label: 'Agents…', click: () => showWindowOnRoute('/agents') },
     { label: 'Paired devices…', click: () => showWindowOnRoute('/devices') },
     { label: 'Settings…', click: () => showWindowOnRoute('/settings') },
     { type: 'separator' },
@@ -160,7 +152,17 @@ function createTray(): void {
   tray = new Tray(image);
   tray.setToolTip('OpenClaw');
   tray.setContextMenu(buildTrayMenu());
-  tray.on('click', toggleMainWindow);
+  // Per P05B step 7: a plain tray click opens the window directly into
+  // the Chat route (rather than just toggling visibility against the
+  // current route). The context menu still has explicit entries for
+  // Pairing / Devices / Settings if the user wants those.
+  tray.on('click', () => {
+    if (mainWindow?.isVisible()) {
+      mainWindow.hide();
+    } else {
+      showWindowOnRoute('/chat');
+    }
+  });
 }
 
 async function bootPairing(): Promise<void> {
@@ -205,6 +207,27 @@ async function bootPairing(): Promise<void> {
     publicKey: pairing.signingKey.publicKey,
     router,
   });
+
+  // ---- Self-token for the renderer chat surface (P05B) ------------------
+  // The renderer authenticates against `/ws` + `/copilot/runtime` with a
+  // local-only token tied to `device_id: "self"`. We mint (or reload)
+  // once at startup and persist it in the same keystore that holds the
+  // signing key. Mounting the IPC handler happens below — see
+  // `IPC.SYSTEM_GET_SELF_TOKEN`.
+  try {
+    selfToken = await openSelfToken({
+      userDataDir: app.getPath('userData'),
+      privateKey: pairing.signingKey.privateKey,
+      publicKey: pairing.signingKey.publicKey,
+      gatewayId: pairing.gatewayId,
+    });
+  } catch (err) {
+    // Don't take the app down. The renderer's chat surface won't work
+    // until the next restart, but pairing + WS still serve real phones.
+    // eslint-disable-next-line no-console
+    console.error('[openclaw] failed to mint self-token:', err);
+    selfToken = null;
+  }
 
   // ---- Bonjour ----------------------------------------------------------
   if (lanEnabled) {
@@ -309,4 +332,26 @@ ipcMain.handle(IPC.SETTINGS_GET, async () => {
     settings = new SettingsStore(app.getPath('userData'));
   }
   return settings.read();
+});
+
+// Per P05B step 8: the renderer fetches its bearer credential + the
+// loopback URLs through this IPC. We always return loopback URLs even
+// when LAN is on — the self-token must not be exposed over the LAN.
+// If `bootPairing` hasn't run yet (or failed), we return null fields so
+// the renderer can surface a friendly "starting up…" state.
+ipcMain.handle(IPC.SYSTEM_GET_SELF_TOKEN, async () => {
+  if (!selfToken) {
+    return {
+      token: '',
+      expires_at: 0,
+      ws_url: `ws://127.0.0.1:${PORT}/ws`,
+      runtime_url: `http://127.0.0.1:${PORT}/copilot/runtime`,
+    };
+  }
+  return {
+    token: selfToken.token,
+    expires_at: selfToken.claim.exp,
+    ws_url: `ws://127.0.0.1:${PORT}/ws`,
+    runtime_url: `http://127.0.0.1:${PORT}/copilot/runtime`,
+  };
 });

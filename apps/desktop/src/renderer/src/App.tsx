@@ -1,15 +1,16 @@
 // Renderer shell.
 //
-// P02B was just a "ping" smoke test. P03B turns this into a tiny multi-page
-// shell: the bridge probe stays (it doubles as a sanity check that the
-// preload pipeline still works) and we add two pages — `approve` (the
-// pairing modal) and `devices` (the paired-devices list opened from the
-// tray menu). Routing is hash-based to avoid pulling in a router; main
-// can navigate by sending `pairing:navigate` events that flip the hash.
+// P02B was a "ping" smoke test. P03B turned this into a hash-routed
+// shell with `approve` + `devices` pages. P04B added Settings, and
+// P05B layers Chat + Agents on top. Routing stays hash-based so the
+// main process can navigate (`webContents.send(IPC.NAVIGATE, '/chat')`)
+// by flipping `window.location.hash`. Tray click → `/chat`.
 
 import type { Agent } from '@openclaw/protocol';
 import { useEffect, useState } from 'react';
+import { Agents } from './pages/Agents';
 import { ApprovePairing } from './pages/ApprovePairing';
+import { Chat } from './pages/Chat';
 import { PairedDevices } from './pages/PairedDevices';
 import { Settings } from './pages/Settings';
 
@@ -24,10 +25,12 @@ const PLACEHOLDER_AGENT: Agent = {
   description: 'Replaced once the gateway lands (P03B+).',
 };
 
-type Route = 'home' | 'approve' | 'devices' | 'settings';
+type Route = 'home' | 'chat' | 'agents' | 'approve' | 'devices' | 'settings';
 
 function parseHash(hash: string): Route {
   const normalized = hash.replace(/^#\/?/, '');
+  if (normalized === 'chat') return 'chat';
+  if (normalized === 'agents') return 'agents';
   if (normalized === 'approve') return 'approve';
   if (normalized === 'devices') return 'devices';
   if (normalized === 'settings') return 'settings';
@@ -61,7 +64,8 @@ export function App(): JSX.Element {
     <main>
       <h1>openclaw-desktop</h1>
       <nav aria-label="primary">
-        <a href="#/">Home</a> · <a href="#/approve">Pairing</a> · <a href="#/devices">Devices</a> ·{' '}
+        <a href="#/">Home</a> · <a href="#/chat">Chat</a> · <a href="#/agents">Agents</a> ·{' '}
+        <a href="#/approve">Pairing</a> · <a href="#/devices">Devices</a> ·{' '}
         <a href="#/settings">Settings</a>
       </nav>
       {route === 'home' ? (
@@ -70,8 +74,13 @@ export function App(): JSX.Element {
           <p>
             Placeholder agent: <code>{PLACEHOLDER_AGENT.id}</code>
           </p>
+          <p>
+            Click <a href="#/chat">Chat</a> to talk to your agent, or use the tray icon.
+          </p>
         </>
       ) : null}
+      {route === 'chat' ? <Chat /> : null}
+      {route === 'agents' ? <Agents /> : null}
       {route === 'approve' ? <ApprovePairing /> : null}
       {route === 'devices' ? <PairedDevices /> : null}
       {route === 'settings' ? <Settings /> : null}

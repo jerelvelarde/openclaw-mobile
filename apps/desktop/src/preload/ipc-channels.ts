@@ -24,6 +24,13 @@ export const IPC = {
   NAVIGATE: 'pairing:navigate',
   /** Renderer → main: fetch the current `SettingsFile` (P04B). */
   SETTINGS_GET: 'settings:get',
+  /**
+   * Renderer → main: fetch the self-issued bearer token + the loopback
+   * URLs the renderer uses to reach the gateway (P05B). Local-only;
+   * never expose this channel's value over IPC to anything but the
+   * trusted renderer.
+   */
+  SYSTEM_GET_SELF_TOKEN: 'system:get-self-token',
 } as const;
 
 /** Payload sent over `PAIRING_PENDING_EVENT` and returned by `PAIRING_LIST_PENDING`. */
@@ -50,4 +57,21 @@ export interface PairedDeviceView {
 export interface SettingsView {
   version: 1;
   lan_enabled: boolean;
+}
+
+/**
+ * Payload returned by `SYSTEM_GET_SELF_TOKEN`. The renderer uses these
+ * to open the local WS + post against the local CopilotKit runtime
+ * adapter. All URLs are loopback (`127.0.0.1`) regardless of whether
+ * LAN exposure is on — the self-token must not leak onto the LAN.
+ */
+export interface SelfTokenView {
+  /** Bearer token signed by the gateway's private key with `device_id: "self"`. */
+  token: string;
+  /** Epoch ms when the token stops being accepted. Renderer refetches near expiry. */
+  expires_at: number;
+  /** Loopback WS URL — `ws://127.0.0.1:<port>/ws`. */
+  ws_url: string;
+  /** Loopback runtime base URL — `http://127.0.0.1:<port>/copilot/runtime`. */
+  runtime_url: string;
 }
