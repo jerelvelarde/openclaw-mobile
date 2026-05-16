@@ -2,10 +2,45 @@
   "name": "@openclaw/mobile",
   "version": "0.0.0",
   "private": true,
-  "description": "Stub. Real Expo scaffolding lands in plan P02A.",
+  "description": "OpenClaw mobile client (Expo / React Native / Web). Pairs to a user-hosted OpenClaw gateway via @openclaw/protocol.",
+  "main": "expo-router/entry",
   "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "echo '[mobile] lint stub — real config lands in P02A' && exit 0",
-    "test": "echo '[mobile] no tests yet — landing in P02A' && exit 0"
+    "lint": "echo '[mobile] lint stub — workspace ESLint config covers .ts/.tsx already' && exit 0",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@openclaw/protocol": "workspace:*",
+    "@expo/vector-icons": "^15.0.3",
+    "@react-navigation/native": "^7.1.8",
+    "expo": "~54.0.33",
+    "expo-constants": "~18.0.13",
+    "expo-font": "~14.0.11",
+    "expo-linking": "~8.0.11",
+    "expo-router": "~6.0.23",
+    "expo-splash-screen": "~31.0.13",
+    "expo-status-bar": "~3.0.9",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-reanimated": "~4.1.1",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-web": "~0.21.0",
+    "react-native-worklets": "0.5.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-native": "^5.4.3",
+    "@testing-library/react-native": "^13.3.3",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.5",
+    "@types/react": "~19.1.0",
+    "jest": "^29.7.0",
+    "jest-expo": "~54.0.0",
+    "react-test-renderer": "19.1.0"
   }
 }

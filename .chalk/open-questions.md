@@ -82,6 +82,9 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 17. **Sub-agent verification baseline** `[process]`
     - Per-plan Verification sections list app-specific gates but sometimes omit repo-wide gates (notably `pnpm format:check`). Wave 2 surfaced this: P01A passed its plan's verification but failed CI's format gate after merge. Fixed by reformatting in a follow-up commit (`e8be21c`) and codifying the baseline in `.chalk/plans/README.md` — sub-agents now must run install / format:check / -r typecheck / -r lint / -r test regardless of per-plan Verification. Revisit if we add more gates (security audit, bundle-size budgets, etc.).
 
+21. **Expo SDK version pin (mobile)** `[mobile]`
+    - P02A pinned `expo@~54.0.33` because `pnpm create expo-app --template tabs` ships the tabs template aligned with SDK 54 (`expo-router@~6.0.23`, `react-native@0.81.5`, `react@19.1.0`), even though `expo@latest` on npm is 55.x. The template tail-lags the latest minor. We should plan a single SDK-bump PR before P03A starts adding feature surface area (or accept the lag and re-evaluate at M3). EAS / CI build configs in P09C should also pin the SDK explicitly.
+
 ---
 
 ## B. Decisions we can make as we go
