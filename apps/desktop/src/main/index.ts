@@ -30,6 +30,8 @@ import { createRouter, type Router } from './transport/router';
 import { attachWsServer, type WsTransport } from './transport/wsServer';
 import { attachStubGateway, type StubGateway } from './gateway/stub';
 import { registerCopilotRuntime } from './copilot/runtime';
+import { createVoiceRouter, type VoiceRouter } from './voice/router';
+import { loadWrtcDeps } from './voice/peer';
 import { IPC } from '../preload/ipc-channels';
 
 const IS_MAC = process.platform === 'darwin';
@@ -43,6 +45,7 @@ let bonjour: BonjourPublisher | null = null;
 let wsTransport: WsTransport | null = null;
 let stubGateway: StubGateway | null = null;
 let router: Router | null = null;
+let voiceRouter: VoiceRouter | null = null;
 let settings: SettingsStore | null = null;
 let lanEnabled = true;
 let selfToken: SelfToken | null = null;
@@ -196,6 +199,20 @@ async function bootPairing(): Promise<void> {
     router,
   });
 
+  // ---- Voice router (P07B) ----------------------------------------------
+  // Lazily loads `@roamhq/wrtc` so a boot on a host without the native
+  // binary (very stripped-down Linux dev containers) doesn't take the
+  // app down — chat/canvas still work, voice surfaces a runtime error
+  // when the phone tries to open a session.
+  try {
+    const deps = await loadWrtcDeps();
+    voiceRouter = createVoiceRouter({ router, deps });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[openclaw] voice router disabled: failed to load @roamhq/wrtc:', err);
+    voiceRouter = null;
+  }
+
   // ---- CopilotKit runtime adapter ---------------------------------------
   // Mounts POST /copilot/runtime/agent/:agentId/run on the same fastify
   // server. This is the live endpoint mobile's CopilotKit client points
@@ -249,6 +266,12 @@ async function bootPairing(): Promise<void> {
 }
 
 async function teardownTransport(): Promise<void> {
+  try {
+    await voiceRouter?.close();
+  } catch {
+    // ignore
+  }
+  voiceRouter = null;
   try {
     stubGateway?.detach();
   } catch {
