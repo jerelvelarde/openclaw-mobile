@@ -15,16 +15,24 @@
 // under `(tabs)/*` can call `useCopilotKit()` + `useCopilotAction()`
 // + `useCopilotReadable()`. The provider only mounts once we have a
 // runtime URL + token in hand — before pairing it has nothing to wrap.
+//
+// P08A adds push registration + the notification handlers. They live
+// alongside the gating logic here (rather than inside `PairingProvider`)
+// so the side effects of "ask for Expo push token" + "subscribe to taps"
+// only run after the layout has mounted the router — `useRouter()` in the
+// response handler depends on being inside an Expo Router tree.
 
-import { Redirect, Slot, Stack, useSegments } from 'expo-router';
+import { Redirect, Slot, Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect, useMemo } from 'react';
-import { SafeAreaView, StyleSheet, View } from 'react-native';
+import { Platform, SafeAreaView, StyleSheet, View } from 'react-native';
 
 import { ReconnectBanner } from '../src/components/ReconnectBanner';
 import { CopilotKitProvider } from '../src/copilot/CopilotKitProvider';
 import { resolveRuntimeUrl } from '../src/copilot/runtimeUrl';
 import { RealGateway } from '../src/openclaw/gateway';
 import { PairingProvider, usePairing } from '../src/pairing/PairingProvider';
+import { attachNotificationResponseHandler, setupNotificationHandler } from '../src/push/handler';
+import { usePushRegistration } from '../src/push/usePushRegistration';
 import { colors } from '../src/theme';
 
 /**
@@ -33,6 +41,7 @@ import { colors } from '../src/theme';
  */
 function Gate() {
   const { state, reconnect, gateway } = usePairing();
+  const router = useRouter();
   // `useSegments` returns the active route segments, e.g.
   // `["(pairing)", "welcome"]` or `["(tabs)", "index"]`. We need this to
   // avoid redirect loops — only redirect when the user is in the "wrong"
@@ -40,6 +49,20 @@ function Gate() {
   const segments = useSegments();
   const inPairingGroup = segments[0] === '(pairing)';
   const inTabsGroup = segments[0] === '(tabs)';
+
+  // P08A — register for Expo push notifications whenever a fresh paired
+  // session lands, and subscribe to notification taps so the user lands
+  // on the right thread. The hook + setup helpers are no-ops on web.
+  usePushRegistration();
+  useEffect(() => {
+    const isWeb = Platform.OS === 'web';
+    const detachResponses = attachNotificationResponseHandler({ router, isWeb });
+    const detachForeground = setupNotificationHandler({ isWeb });
+    return () => {
+      detachResponses();
+      detachForeground();
+    };
+  }, [router]);
 
   // Open the WS once the user is paired. Idempotent — `connect()` ignores
   // repeat calls when there's already a live socket. We do this in an
