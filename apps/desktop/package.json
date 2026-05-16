@@ -2,10 +2,32 @@
   "name": "@openclaw/desktop",
   "version": "0.0.0",
   "private": true,
-  "description": "Stub. Real Electron scaffolding lands in plan P02B.",
+  "description": "OpenClaw desktop companion (Electron + electron-vite + React). Menu-bar shell only; pairing, transport, and chat land in later plans.",
+  "main": "out/main/index.js",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "echo '[desktop] lint stub — real config lands in P02B' && exit 0",
-    "test": "echo '[desktop] no tests yet — landing in P02B' && exit 0"
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint . --ext .ts,.tsx",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openclaw/protocol": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.3.1",
+    "electron-vite": "^2.3.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
   }
 }
