@@ -85,6 +85,9 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 21. **Expo SDK version pin (mobile)** `[mobile]`
     - P02A pinned `expo@~54.0.33` because `pnpm create expo-app --template tabs` ships the tabs template aligned with SDK 54 (`expo-router@~6.0.23`, `react-native@0.81.5`, `react@19.1.0`), even though `expo@latest` on npm is 55.x. The template tail-lags the latest minor. We should plan a single SDK-bump PR before P03A starts adding feature surface area (or accept the lag and re-evaluate at M3). EAS / CI build configs in P09C should also pin the SDK explicitly.
 
+22. **Production hardening of the desktop keystore fallback** `[desktop]`
+    - P03B's plan calls for the Ed25519 signing key to live in macOS Keychain via `keytar`. On Linux without libsecret (notably this repo's dev container), `keytar` fails to load, so the keystore at `apps/desktop/src/main/pair/keystore.ts` falls back to an AES-256-GCM-encrypted file at `userData/keystore.enc`. The encryption key is derived (`scrypt`) from `/etc/machine-id` (or `os.hostname()+os.platform()` if absent) with a static salt — adequate for the dev loop but not a real defense against an attacker with disk access. Before v1 ships on Linux we need either: (a) a hard dep on libsecret + a clear install error if it's missing, (b) a Tauri-style OS-keyring wrapper that fails closed, or (c) an explicit user-supplied passphrase derived via PBKDF2. macOS + Windows users hit the keytar path and are unaffected. Revisit alongside the existing question about where the per-gateway signing keypair lives (A.9 territory).
+
 ---
 
 ## B. Decisions we can make as we go

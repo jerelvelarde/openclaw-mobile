@@ -1,8 +1,7 @@
-// Vitest config for the renderer. The main + preload processes don't have
-// unit tests yet — they're thin glue around Electron APIs that are easier
-// to cover via the eventual e2e setup (P09B+).
-//
-// `environment: 'jsdom'` lets us render <App /> with @testing-library/react.
+// Vitest config covering the renderer (jsdom) + the main-process pairing
+// modules (node). The renderer tests live under `src/renderer/.../__tests__`;
+// the main tests live under `src/main/.../__tests__`. Each gets the
+// environment it needs via `environmentMatchGlobs`.
 
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
@@ -10,8 +9,12 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   test: {
-    environment: 'jsdom',
-    include: ['src/renderer/**/__tests__/**/*.test.{ts,tsx}'],
+    environment: 'node',
+    include: ['src/renderer/**/__tests__/**/*.test.{ts,tsx}', 'src/main/**/*.test.ts'],
+    environmentMatchGlobs: [
+      ['src/renderer/**', 'jsdom'],
+      ['src/main/**', 'node'],
+    ],
     globals: false,
   },
 });
