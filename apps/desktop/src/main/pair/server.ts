@@ -1,0 +1,257 @@
+// Local HTTP pairing service.
+//
+// Per P03B step 5: a fastify server bound to **127.0.0.1 only** that
+// implements the three HTTP routes mobile depends on at first contact:
+//
+//   POST /pair/request        — phone announces itself, gets a code + pair_id.
+//   GET  /pair/status         — phone polls until the user approves/denies.
+//   GET  /healthz             — used by mobile's Bonjour probe + dev curl.
+//
+// LAN exposure (binding to `0.0.0.0` / advertising via Bonjour) is P04B's
+// job — we DO NOT bind anywhere else here. WebSocket transport is P04B
+// too. The CopilotKit runtime adapter that `runtime_url` will eventually
+// point at lands in P05C; for now we return a placeholder URL.
+//
+// The pending-pair table lives in-memory: pairing requests are transient
+// and don't survive a desktop restart on purpose (the user will just
+// re-pair). Approved devices persist via `DeviceStore`.
+
+import { randomBytes, randomUUID } from 'node:crypto';
+import Fastify, { FastifyInstance } from 'fastify';
+import { DEFAULT_TOKEN_TTL_MS, issueToken } from './token';
+import { DeviceStore } from './store';
+import type { SigningKey } from './keypair';
+
+/** Default loopback port. Override via the `OPENCLAW_DESKTOP_PORT` env. */
+export const DEFAULT_PORT = 18789;
+
+/** Placeholder runtime URL returned at pairing time. Real adapter is P05C. */
+export const RUNTIME_URL_PLACEHOLDER = 'http://127.0.0.1:18789/copilot/runtime';
+
+/** Default time-to-approve for a pending pairing request. */
+export const DEFAULT_PAIR_TTL_MS = 5 * 60 * 1000;
+
+/** In-memory record for a not-yet-approved pairing request. */
+export interface PendingPair {
+  pair_id: string;
+  device_name: string;
+  /** Base64-encoded Ed25519 public key the phone sent us. Kept verbatim. */
+  public_key: string;
+  /** Six-digit numeric code shown to the user for visual confirmation. */
+  code: string;
+  /** Epoch ms when this pending entry stops being valid. */
+  expires_at: number;
+  /** Current state in the approval state machine. */
+  status: 'pending' | 'approved' | 'denied';
+  /** Populated only once `status === 'approved'`. */
+  token?: string;
+  /** Populated only once `status === 'approved'` — see RUNTIME_URL_PLACEHOLDER. */
+  runtime_url?: string;
+  /** Populated only once approved — assigned at approve time. */
+  device_id?: string;
+}
+
+interface PairRequestBody {
+  device_name?: unknown;
+  public_key?: unknown;
+}
+
+interface PairStatusQuery {
+  pair_id?: unknown;
+}
+
+/** Generate a 6-digit zero-padded numeric code. */
+function generateCode(): string {
+  // randomInt would do, but we use randomBytes to avoid the small bias of
+  // modulo and keep all six digits uniformly distributed.
+  const bytes = randomBytes(4);
+  const n = bytes.readUInt32BE(0) % 1_000_000;
+  return n.toString().padStart(6, '0');
+}
+
+/**
+ * Build the in-memory pending-pair table. Returned as an object so the
+ * server + the IPC layer can share the same map without re-exposing
+ * implementation details.
+ */
+export class PendingPairTable {
+  private readonly pairs = new Map<string, PendingPair>();
+
+  add(pair: PendingPair): void {
+    this.pairs.set(pair.pair_id, pair);
+  }
+
+  get(pairId: string): PendingPair | undefined {
+    return this.pairs.get(pairId);
+  }
+
+  /** All not-yet-resolved pairs, oldest first. */
+  listPending(now: number = Date.now()): PendingPair[] {
+    const out: PendingPair[] = [];
+    for (const p of this.pairs.values()) {
+      if (p.status === 'pending' && p.expires_at > now) {
+        out.push(p);
+      }
+    }
+    return out.sort((a, b) => a.expires_at - b.expires_at);
+  }
+
+  /** Purge expired pending entries and resolved entries older than 10 minutes. */
+  gc(now: number = Date.now()): void {
+    for (const [id, p] of this.pairs) {
+      if (p.status === 'pending' && p.expires_at <= now) {
+        this.pairs.delete(id);
+      } else if (p.status !== 'pending' && p.expires_at + 10 * 60 * 1000 <= now) {
+        this.pairs.delete(id);
+      }
+    }
+  }
+}
+
+/** Inputs the server needs at construction time. */
+export interface BuildServerOptions {
+  /** Loaded signing key from `loadOrCreateSigningKey`. */
+  signingKey: SigningKey;
+  /** Stable gateway id (`{userDataDir}/gateway_id` is created on first run). */
+  gatewayId: string;
+  /** Persistent device store for approved devices. */
+  deviceStore: DeviceStore;
+  /** Build version exposed via `/healthz`. */
+  version: string;
+  /**
+   * Hook called whenever a new pairing request arrives. The main process
+   * wires this to the notification helper + the renderer modal.
+   */
+  onPendingPair?: (pair: PendingPair) => void;
+  /** Override the pending TTL (ms). Defaults to `DEFAULT_PAIR_TTL_MS`. */
+  pairTtlMs?: number;
+  /** Override the issued-token TTL (ms). Defaults to `DEFAULT_TOKEN_TTL_MS`. */
+  tokenTtlMs?: number;
+  /** Inject the pending table — useful for tests. */
+  pendingTable?: PendingPairTable;
+}
+
+/** Bundle returned from `buildPairingServer` for the main process to manage. */
+export interface PairingServer {
+  fastify: FastifyInstance;
+  pending: PendingPairTable;
+  /**
+   * Approve a pending pair: issue a token, persist the device, and flip
+   * the pending entry to "approved". Returns the resolved entry, or
+   * `null` if the pair_id is unknown / already resolved / expired.
+   */
+  approve(pairId: string, now?: number): PendingPair | null;
+  /** Symmetric counterpart to `approve`. */
+  deny(pairId: string, now?: number): PendingPair | null;
+}
+
+/**
+ * Construct a fastify server with the three pairing routes wired up. The
+ * server is **not** listening yet — callers do `fastify.listen({ host:
+ * '127.0.0.1', port })` (or `fastify.inject` in tests).
+ */
+export function buildPairingServer(opts: BuildServerOptions): PairingServer {
+  const pending = opts.pendingTable ?? new PendingPairTable();
+  const pairTtlMs = opts.pairTtlMs ?? DEFAULT_PAIR_TTL_MS;
+  const tokenTtlMs = opts.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
+
+  const fastify = Fastify({ logger: false });
+
+  fastify.get('/healthz', async () => {
+    return { ok: true, gateway_id: opts.gatewayId, version: opts.version };
+  });
+
+  fastify.post<{ Body: PairRequestBody }>('/pair/request', async (req, reply) => {
+    const body = req.body ?? {};
+    const deviceName = typeof body.device_name === 'string' ? body.device_name.trim() : '';
+    const publicKey = typeof body.public_key === 'string' ? body.public_key : '';
+    if (!deviceName || !publicKey) {
+      void reply.code(400);
+      return { error: 'device_name and public_key are required strings' };
+    }
+    const now = Date.now();
+    pending.gc(now);
+    const pair: PendingPair = {
+      pair_id: randomUUID(),
+      device_name: deviceName,
+      public_key: publicKey,
+      code: generateCode(),
+      expires_at: now + pairTtlMs,
+      status: 'pending',
+    };
+    pending.add(pair);
+    try {
+      opts.onPendingPair?.(pair);
+    } catch {
+      // The notification handler is best-effort. If it throws (e.g. no
+      // Electron available in tests), the pair still queues up — the
+      // renderer can pull it via the IPC list call.
+    }
+    return { pair_id: pair.pair_id, code: pair.code, expires_at: pair.expires_at };
+  });
+
+  fastify.get<{ Querystring: PairStatusQuery }>('/pair/status', async (req, reply) => {
+    const pairId = typeof req.query.pair_id === 'string' ? req.query.pair_id : '';
+    if (!pairId) {
+      void reply.code(400);
+      return { error: 'pair_id is required' };
+    }
+    const now = Date.now();
+    pending.gc(now);
+    const pair = pending.get(pairId);
+    if (!pair) {
+      void reply.code(404);
+      return { error: 'unknown pair_id' };
+    }
+    if (pair.status === 'pending' && pair.expires_at <= now) {
+      void reply.code(410);
+      return { status: 'denied', error: 'expired' };
+    }
+    if (pair.status === 'approved') {
+      return {
+        status: 'approved' as const,
+        token: pair.token,
+        runtime_url: pair.runtime_url,
+      };
+    }
+    if (pair.status === 'denied') {
+      return { status: 'denied' as const };
+    }
+    return { status: 'pending' as const };
+  });
+
+  function approve(pairId: string, now: number = Date.now()): PendingPair | null {
+    const pair = pending.get(pairId);
+    if (!pair || pair.status !== 'pending') return null;
+    if (pair.expires_at <= now) return null;
+    const deviceId = randomUUID();
+    const token = issueToken(opts.signingKey.privateKey, {
+      device_id: deviceId,
+      device_name: pair.device_name,
+      gateway_id: opts.gatewayId,
+      ttlMs: tokenTtlMs,
+      issuedAt: now,
+    });
+    pair.status = 'approved';
+    pair.token = token;
+    pair.runtime_url = RUNTIME_URL_PLACEHOLDER;
+    pair.device_id = deviceId;
+    opts.deviceStore.addDevice({
+      device_id: deviceId,
+      device_name: pair.device_name,
+      paired_at: now,
+      last_seen: now,
+    });
+    return pair;
+  }
+
+  function deny(pairId: string, now: number = Date.now()): PendingPair | null {
+    const pair = pending.get(pairId);
+    if (!pair || pair.status !== 'pending') return null;
+    if (pair.expires_at <= now) return null;
+    pair.status = 'denied';
+    return pair;
+  }
+
+  return { fastify, pending, approve, deny };
+}

@@ -1,26 +1,33 @@
 // Electron main process for the OpenClaw desktop shell.
 //
-// Scope for P02B: open a hidden BrowserWindow, install a macOS menu-bar tray
-// (Show / Quit), and hold a single-instance lock so two copies of the app
-// can't fight over the gateway port later. Pairing, transport, supervision,
-// and chat all land in P03B+ — none of that lives here yet.
+// P02B opened a hidden BrowserWindow + tray (Show / Quit) and a single-
+// instance lock. P03B now boots the pairing controller as well: it loads
+// or creates the Ed25519 signing key, opens a fastify HTTP server on
+// `127.0.0.1:18789` (loopback only — LAN exposure is P04B), and wires
+// up IPC handlers + the macOS pairing notification.
 //
-// macOS-only behaviors (`Tray`, `app.dock.hide`) are guarded with
-// `process.platform === "darwin"` so Linux dev/CI can still boot the build
-// without a tray icon asset or a dock to hide.
+// macOS-only behaviors (`Tray`, `app.dock.hide`, `Notification` actions)
+// are guarded with `process.platform === "darwin"` so Linux dev/CI can
+// still boot the build without a tray icon asset or a dock to hide.
 
-import { app, BrowserWindow, Menu, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage } from 'electron';
 import { join } from 'node:path';
 
 // Imported only to prove the `@openclaw/protocol` workspace link resolves in
-// the main process. The real wiring lands in P03B (pairing) and P04B
-// (transport). Reference it as a type so tree-shaking drops it at runtime.
+// the main process. The real wiring lands in P04B (transport). Reference it
+// as a type so tree-shaking drops it at runtime.
 import type { Agent } from '@openclaw/protocol';
+import { buildPairingController, PairingController } from './pair/controller';
+import { DEFAULT_PORT } from './pair/server';
+import { IPC } from '../preload/ipc-channels';
 
 const IS_MAC = process.platform === 'darwin';
+const PORT = Number.parseInt(process.env['OPENCLAW_DESKTOP_PORT'] ?? '', 10) || DEFAULT_PORT;
+const APP_VERSION = app.getVersion();
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let pairing: PairingController | null = null;
 
 // Keep the placeholder import live for typecheck without polluting runtime.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -63,6 +70,10 @@ function createMainWindow(): BrowserWindow {
 
 let isQuitting = false;
 
+function getMainWindow(): BrowserWindow | null {
+  return mainWindow;
+}
+
 function toggleMainWindow(): void {
   if (!mainWindow) {
     mainWindow = createMainWindow();
@@ -73,6 +84,15 @@ function toggleMainWindow(): void {
     mainWindow.show();
     mainWindow.focus();
   }
+}
+
+function showWindowOnRoute(route: string): void {
+  if (!mainWindow) {
+    mainWindow = createMainWindow();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send(IPC.NAVIGATE, route);
 }
 
 function createTray(): void {
@@ -100,6 +120,7 @@ function createTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Show', click: toggleMainWindow },
+      { label: 'Paired devices…', click: () => showWindowOnRoute('/devices') },
       { type: 'separator' },
       {
         label: 'Quit',
@@ -111,6 +132,18 @@ function createTray(): void {
     ]),
   );
   tray.on('click', toggleMainWindow);
+}
+
+async function bootPairing(): Promise<void> {
+  pairing = await buildPairingController({
+    userDataDir: app.getPath('userData'),
+    version: APP_VERSION,
+    ipcMain,
+    getWindow: getMainWindow,
+    Notification: IS_MAC ? Notification : undefined,
+  });
+  // Bind to loopback only — LAN exposure is P04B.
+  await pairing.server.fastify.listen({ host: '127.0.0.1', port: PORT });
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -130,6 +163,10 @@ if (!gotSingleInstanceLock) {
     isQuitting = true;
   });
 
+  app.on('will-quit', () => {
+    void pairing?.close();
+  });
+
   // On macOS the app stays alive in the menu bar with no windows; on other
   // platforms quitting all windows quits the app, matching default UX.
   app.on('window-all-closed', () => {
@@ -138,12 +175,19 @@ if (!gotSingleInstanceLock) {
     }
   });
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     if (IS_MAC) {
       // Menu-bar-only app: no dock icon.
       app.dock?.hide();
     }
     mainWindow = createMainWindow();
     createTray();
+    try {
+      await bootPairing();
+    } catch (err) {
+      // Don't take the whole app down if the port is busy in dev; just
+      // log + leave the renderer up. P04B will add a real diagnostic UX.
+      console.error('[openclaw] failed to start pairing server:', err);
+    }
   });
 }
