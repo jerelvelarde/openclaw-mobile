@@ -11,8 +11,6 @@
 
 import type {
   Agent,
-  CanvasPatch,
-  CanvasSurface,
   Message,
   MessageInput,
   PairingApproved,
@@ -23,6 +21,7 @@ import type {
   VoiceOpts,
   VoiceSession,
 } from './types';
+import { CANVAS_SCHEMA_VERSION, type CanvasPatch, type CanvasSurface } from './canvas';
 import type {
   GatewayClient,
   GatewayEvent,
@@ -326,9 +325,20 @@ export class InMemoryMockGateway implements GatewayClient {
     if (existing) return existing;
     const surface: CanvasSurface = {
       id: surfaceId,
-      title: `Mock surface ${surfaceId}`,
-      content: { kind: 'empty' },
-      updatedAt: Date.now(),
+      version: CANVAS_SCHEMA_VERSION,
+      root: {
+        type: 'stack',
+        id: `${surfaceId}_root`,
+        direction: 'vertical',
+        children: [
+          {
+            type: 'heading',
+            id: `${surfaceId}_title`,
+            text: `Mock surface ${surfaceId}`,
+            level: 2,
+          },
+        ],
+      },
     };
     this.canvasById.set(surfaceId, surface);
     return surface;

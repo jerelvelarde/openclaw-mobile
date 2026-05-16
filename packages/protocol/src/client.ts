@@ -8,8 +8,6 @@
 
 import type {
   Agent,
-  CanvasPatch,
-  CanvasSurface,
   MessageInput,
   PairingApproved,
   PairingRequest,
@@ -19,6 +17,7 @@ import type {
   VoiceOpts,
   VoiceSession,
 } from './types';
+import type { CanvasPatch, CanvasSurface } from './canvas';
 
 /** Removes a previously-registered listener. */
 export type Unsubscribe = () => void;
