@@ -72,6 +72,22 @@ describe('pairingReducer', () => {
     expect(next.token).toEqual(FAKE_TOKEN);
     expect(next.approved).toEqual(FAKE_APPROVED);
     expect(next.code).toBe('123456');
+    // P05A: paired state also carries runtimeUrl from PairingApproved so
+    // the CopilotKit provider can resume without re-pairing.
+    expect(next.runtimeUrl).toBe(FAKE_APPROVED.runtimeUrl);
+  });
+
+  it('APPROVED records httpBase when provided', () => {
+    const next = pairingReducer(
+      { status: 'awaiting_approval', code: '123456', expiresAt: 1 },
+      {
+        type: 'APPROVED',
+        token: FAKE_TOKEN,
+        approved: FAKE_APPROVED,
+        httpBase: 'http://192.168.1.42:18789',
+      },
+    );
+    expect(next.httpBase).toBe('http://192.168.1.42:18789');
   });
 
   it('APPROVED is ignored outside awaiting_approval', () => {
@@ -103,6 +119,24 @@ describe('pairingReducer', () => {
   it('LOADED_TOKEN jumps directly to paired regardless of starting state', () => {
     const next = pairingReducer({ status: 'idle' }, { type: 'LOADED_TOKEN', token: FAKE_TOKEN });
     expect(next).toEqual<PairingState>({ status: 'paired', token: FAKE_TOKEN });
+  });
+
+  it('LOADED_TOKEN carries runtimeUrl + httpBase when present', () => {
+    const next = pairingReducer(
+      { status: 'idle' },
+      {
+        type: 'LOADED_TOKEN',
+        token: FAKE_TOKEN,
+        runtimeUrl: 'http://192.168.1.42:18789/copilot/runtime',
+        httpBase: 'http://192.168.1.42:18789',
+      },
+    );
+    expect(next).toEqual<PairingState>({
+      status: 'paired',
+      token: FAKE_TOKEN,
+      runtimeUrl: 'http://192.168.1.42:18789/copilot/runtime',
+      httpBase: 'http://192.168.1.42:18789',
+    });
   });
 
   it('walks the full happy path end-to-end', () => {

@@ -31,6 +31,7 @@ import type {
   Agent,
   CanvasPatch,
   CanvasSurface,
+  Envelope,
   GatewayClient,
   GatewayEvent,
   GatewayEventPayload,
@@ -45,6 +46,7 @@ import type {
   VoiceOpts,
   VoiceSession,
 } from '@openclaw/protocol';
+import { encode } from '@openclaw/protocol';
 
 import { resolveHttpBase, startPairingFlow, type FetchLike } from './http';
 import { ReconnectController, type ReconnectListener, type ReconnectState } from './reconnect';
@@ -114,6 +116,44 @@ export class RealGateway implements GatewayClient {
 
   /** Reconnect-state subscribers (used by the global banner). */
   private reconnectListeners = new Set<ReconnectListener>();
+
+  /**
+   * Pending request → response correlations, keyed by frame `id`. P05A
+   * uses this for `agents.list` / `agents.setActive` / `threads.list`
+   * round-trips: send a frame with an id, store the resolver, and the
+   * inbound `onMessage` handler fans out by id.
+   */
+  private pendingRequests = new Map<
+    string,
+    {
+      resolve: (frame: Envelope<unknown>) => void;
+      reject: (err: Error) => void;
+      /** Timer handle for the per-request timeout. */
+      timer: ReturnType<typeof setTimeout> | null;
+    }
+  >();
+
+  /**
+   * Per-thread subscribers. Multiple screens (chat + canvas + an
+   * inspector) may want to follow the same thread, so we fan-out by id.
+   * The desktop's `threads.event` frames carry `payload.message.threadId`
+   * (or `payload.messageId` for stream-only deltas) — we use that to
+   * route.
+   */
+  private threadSubscribers = new Map<string, Set<(e: ThreadEvent) => void>>();
+
+  /**
+   * Map of `messageId` → `threadId` populated when a `message` event
+   * arrives. Used to route subsequent stream events (`token` /
+   * `tool_call` / `done`) which only carry `messageId`. We keep at most
+   * 128 entries (FIFO) so the map can't grow unbounded; replays older
+   * than that fall through silently, which is acceptable for v1.
+   */
+  private messageThreadMap = new Map<string, string>();
+  /** FIFO key order for `messageThreadMap` so we can evict cheaply. */
+  private messageThreadOrder: string[] = [];
+  /** Soft cap so the map can't grow without bound. */
+  private readonly MESSAGE_MAP_LIMIT = 128;
 
   constructor(opts: RealGatewayOptions) {
     this.httpBase = resolveHttpBase(opts.httpBase);
@@ -210,6 +250,9 @@ export class RealGateway implements GatewayClient {
                   this.emit('error', { error: err });
                   // Don't reject the attempt here — `onclose` always follows.
                 },
+                onMessage: (raw) => {
+                  this.handleInboundFrame(raw);
+                },
               },
             );
             this.socket = handle;
@@ -278,35 +321,194 @@ export class RealGateway implements GatewayClient {
     }
   }
 
+  // ── Inbound frame routing (P05A) ──────────────────────────────────────────
+
+  /**
+   * Dispatch an inbound raw frame to either a pending request (when the
+   * frame's `id` matches a stored correlation) or to the thread-event
+   * fan-out (`topic === 'threads'` / `type === 'threads.event'`).
+   *
+   * We do JSON parsing here instead of via `@openclaw/protocol`'s `decode()`
+   * because we don't have a single payload schema — different topics carry
+   * different shapes. The router on the desktop side already validates
+   * outbound payloads, so we trust the structure once `id`/`topic`/`type`
+   * are strings.
+   */
+  private handleInboundFrame(raw: string): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Heartbeat or malformed frame — log and move on. Spamming
+      // `disconnect` for one bad payload would be hostile.
+      return;
+    }
+    if (!isEnvelopeLike(parsed)) return;
+    const frame = parsed as Envelope<unknown>;
+    // 1. Request/response correlation.
+    const pending = this.pendingRequests.get(frame.id);
+    if (pending) {
+      this.pendingRequests.delete(frame.id);
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.resolve(frame);
+      // Some response types (notably `threads.event` for posted messages)
+      // also need to fan out to thread subscribers; fall through.
+    }
+    // 2. Thread events (broadcast, not request-scoped).
+    if (frame.topic === 'threads' || frame.type === 'threads.event') {
+      this.fanOutThreadEvent(frame);
+      return;
+    }
+    // 3. System pong — `ws.ts` schedules the next heartbeat on
+    // `onmessage` already, no extra action needed here.
+  }
+
+  /**
+   * Route a `threads.event` payload to every subscriber for its thread.
+   * `message` events carry `threadId` directly; stream events
+   * (`token`/`tool_call`/`done`) only carry `messageId`, so we look up
+   * the parent thread id in the `messageThreadMap` populated when the
+   * matching `message` event arrived.
+   */
+  private fanOutThreadEvent(frame: Envelope<unknown>): void {
+    const payload = frame.payload as ThreadEvent | undefined;
+    if (!payload || typeof payload !== 'object' || typeof payload.type !== 'string') return;
+    let threadId: string | undefined;
+    if (payload.type === 'message') {
+      threadId = payload.message.threadId;
+      this.rememberMessageThread(payload.message.id, threadId);
+    } else if ('messageId' in payload && typeof payload.messageId === 'string') {
+      threadId = this.messageThreadMap.get(payload.messageId);
+    }
+    if (!threadId) return;
+    const subs = this.threadSubscribers.get(threadId);
+    if (!subs) return;
+    for (const sub of [...subs]) {
+      try {
+        sub(payload);
+      } catch (err) {
+        // Subscriber errors should not poison the router.
+        this.emit('error', { error: err instanceof Error ? err : new Error(String(err)) });
+      }
+    }
+  }
+
+  /** Remember `messageId → threadId` with FIFO eviction. */
+  private rememberMessageThread(messageId: string, threadId: string): void {
+    if (this.messageThreadMap.has(messageId)) return;
+    this.messageThreadMap.set(messageId, threadId);
+    this.messageThreadOrder.push(messageId);
+    if (this.messageThreadOrder.length > this.MESSAGE_MAP_LIMIT) {
+      const evict = this.messageThreadOrder.shift();
+      if (evict) this.messageThreadMap.delete(evict);
+    }
+  }
+
+  /**
+   * Send a frame and wait for a response with the same `id`. Resolves with
+   * the response frame, or rejects on timeout / socket-not-open. Used by
+   * the request/response WS topics (`agents.list`, `agents.setActive`,
+   * `threads.list`).
+   */
+  private async sendAndWait(
+    frame: Envelope<unknown>,
+    timeoutMs = 10_000,
+  ): Promise<Envelope<unknown>> {
+    if (!this.socket || !this.socket.isOpen()) {
+      throw new Error('Gateway not connected');
+    }
+    return new Promise<Envelope<unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(frame.id);
+        reject(new Error(`Gateway request ${frame.type} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pendingRequests.set(frame.id, { resolve, reject, timer });
+      try {
+        this.socket?.send(encode(frame));
+      } catch (err) {
+        this.pendingRequests.delete(frame.id);
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  }
+
+  /** Build a frame skeleton with a fresh `id`. */
+  private buildFrame<P>(topic: string, type: string, payload: P): Envelope<P> {
+    return {
+      id: `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+      topic,
+      type,
+      payload,
+      ts: Date.now(),
+    };
+  }
+
   // ── Agents & routing (P04B WS topics) ─────────────────────────────────────
 
   async listAgents(): Promise<Agent[]> {
-    // TODO(P04B): once the desktop exposes the `agents.list` WS topic, send
-    // an envelope frame and resolve with the response. Returning an empty
-    // list keeps the agents screen renderable without throwing.
-    return [];
+    // Topic `agents` — the router fires on prefix `agents.list`. The
+    // stub gateway answers with `agents.list.response` carrying `{ agents }`.
+    const frame = this.buildFrame<Record<string, never>>('agents', 'agents.list', {});
+    const res = await this.sendAndWait(frame);
+    const body = (res.payload ?? {}) as { agents?: Agent[] };
+    return Array.isArray(body.agents) ? body.agents : [];
   }
 
-  async setActiveAgent(_agentId: string): Promise<void> {
-    throw new Error('setActiveAgent() requires the WS agents.* topics (P04B)');
+  async setActiveAgent(agentId: string): Promise<void> {
+    const frame = this.buildFrame('agents', 'agents.setActive', { agentId });
+    const res = await this.sendAndWait(frame);
+    const body = (res.payload ?? {}) as { ok?: boolean; reason?: string };
+    if (body.ok !== true) {
+      throw new Error(body.reason ?? `setActiveAgent(${agentId}) rejected by gateway`);
+    }
   }
 
   // ── Threads / messages (P04B WS topics) ───────────────────────────────────
 
   async listThreads(): Promise<Thread[]> {
-    // TODO(P04B): mirror `listAgents` — proxy to `threads.list` once it lands.
-    return [];
+    // The stub gateway doesn't yet expose `threads.list` (open question
+    // #26 / #28); return [] rather than throwing so callers stay
+    // composable. When the desktop grows the topic this will start
+    // returning real data without any UI changes.
+    if (!this.socket || !this.socket.isOpen()) return [];
+    try {
+      const frame = this.buildFrame<Record<string, never>>('threads', 'threads.list', {});
+      const res = await this.sendAndWait(frame, 5_000);
+      const body = (res.payload ?? {}) as { threads?: Thread[] };
+      return Array.isArray(body.threads) ? body.threads : [];
+    } catch {
+      // Treat a missing topic as an empty list rather than a hard error.
+      return [];
+    }
   }
 
-  async postMessage(_threadId: string, _input: MessageInput): Promise<void> {
-    throw new Error('postMessage() requires the WS threads.* topics (P04B)');
+  async postMessage(threadId: string, input: MessageInput): Promise<void> {
+    if (!this.socket || !this.socket.isOpen()) {
+      throw new Error('Gateway not connected');
+    }
+    const frame = this.buildFrame('threads', 'threads.post', {
+      threadId,
+      content: input.content,
+    });
+    // `threads.post` doesn't have a synchronous response we wait on — the
+    // gateway streams `threads.event` frames as the conversation progresses,
+    // which the subscriber consumes. We do a fire-and-forget here.
+    this.socket.send(encode(frame));
   }
 
-  streamThread(_threadId: string, _onEvent: (e: ThreadEvent) => void): Unsubscribe {
-    // No-op subscription until P04B; returning a sane `Unsubscribe` keeps
-    // existing call sites from null-checking.
+  streamThread(threadId: string, onEvent: (e: ThreadEvent) => void): Unsubscribe {
+    let subs = this.threadSubscribers.get(threadId);
+    if (!subs) {
+      subs = new Set();
+      this.threadSubscribers.set(threadId, subs);
+    }
+    subs.add(onEvent);
     return () => {
-      /* no-op */
+      const set = this.threadSubscribers.get(threadId);
+      if (!set) return;
+      set.delete(onEvent);
+      if (set.size === 0) this.threadSubscribers.delete(threadId);
     };
   }
 
@@ -332,4 +534,23 @@ export class RealGateway implements GatewayClient {
   _getCurrentToken(): string | null {
     return this.currentToken;
   }
+
+  /**
+   * Test helper: push a raw frame through the inbound router as if it
+   * came from the WS. Production code paths never call this; the
+   * `__tests__` use it to drive request/response + stream behaviour
+   * without a live socket.
+   */
+  _injectInboundFrame(raw: string): void {
+    this.handleInboundFrame(raw);
+  }
+}
+
+/** Lightweight check that an unknown value has the four envelope fields. */
+function isEnvelopeLike(
+  v: unknown,
+): v is { id: string; topic: string; type: string; payload: unknown } {
+  if (typeof v !== 'object' || v === null) return false;
+  const e = v as { id?: unknown; topic?: unknown; type?: unknown };
+  return typeof e.id === 'string' && typeof e.topic === 'string' && typeof e.type === 'string';
 }

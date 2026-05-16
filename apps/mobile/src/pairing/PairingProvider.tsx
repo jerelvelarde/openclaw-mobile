@@ -33,7 +33,12 @@ import {
 } from '../openclaw/gateway';
 
 import { initialPairingState, pairingReducer, type PairingEvent, type PairingState } from './state';
-import { clearPairingToken, loadPairingToken, savePairingToken } from './store';
+import {
+  clearPairingSession,
+  loadPairingSession,
+  savePairingSession,
+  type PersistedSession,
+} from './store';
 
 /**
  * Public hook return shape. `state` and `dispatch` are the raw reducer
@@ -101,16 +106,33 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
   // is in use). Stored in React state so subscribers re-render on transitions.
   const [reconnectState, setReconnectState] = useState<ReconnectState | null>(null);
 
-  // On first mount, try to load a persisted token. If we find one, jump
-  // straight to `paired` so the user lands in `(tabs)` without re-pairing.
+  // On first mount, try to load a persisted session (token + runtimeUrl +
+  // httpBase). If we find one, jump straight to `paired` so the user
+  // lands in `(tabs)` without re-pairing. P05A: also rebuild a
+  // `RealGateway` from `httpBase` so the CopilotKit / threads screens
+  // can talk to the WS topics without going through the pairing flow.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const token = await loadPairingToken();
+        const session = await loadPairingSession();
         if (cancelled) return;
-        if (token) {
-          dispatch({ type: 'LOADED_TOKEN', token });
+        if (session) {
+          // If we recover an httpBase, instantiate a real gateway for the
+          // rest of the session. We only do this when the caller didn't
+          // already provide a gateway override (test path).
+          if (!gateway && session.httpBase) {
+            gatewayRef.current = new RealGateway({
+              httpBase: session.httpBase,
+              deviceName: 'OpenClaw mobile',
+            });
+          }
+          dispatch({
+            type: 'LOADED_TOKEN',
+            token: session.token,
+            ...(session.runtimeUrl ? { runtimeUrl: session.runtimeUrl } : {}),
+            ...(session.httpBase ? { httpBase: session.httpBase } : {}),
+          });
         }
       } catch (err) {
         // A corrupted store shouldn't crash the app; surface as a soft error
@@ -125,11 +147,22 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
     return () => {
       cancelled = true;
     };
+    // The provider mounts once; the gateway override is captured at first
+    // render and doesn't change in practice. Listing `gateway` would
+    // re-run this load on every render in tests that pass a fresh mock.
   }, []);
+
+  // We track the `httpBase` chosen for the in-flight pairing so we can
+  // persist it alongside the approved token. The reducer also stores it
+  // on the state, but the screen-side reducer flow runs slightly behind
+  // the awaitPaired() resolution; a ref-side copy guarantees the correct
+  // value reaches `savePairingSession`.
+  const httpBaseRef = useRef<string | undefined>(undefined);
 
   const selectHost = useCallback(
     async (hostId: string, deviceName: string, httpBase?: string) => {
-      dispatch({ type: 'HOST_SELECTED', hostId });
+      dispatch({ type: 'HOST_SELECTED', hostId, ...(httpBase ? { httpBase } : {}) });
+      httpBaseRef.current = httpBase;
       try {
         // If the caller passed a real host base, swap in a `RealGateway`
         // for the rest of the flow. The mock path is preserved for tests +
@@ -165,8 +198,19 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
 
   const finalizePairing = useCallback(async (token: Token, approved: PairingApproved) => {
     try {
-      await savePairingToken(token);
-      dispatch({ type: 'APPROVED', token, approved });
+      const httpBase = httpBaseRef.current;
+      const session: PersistedSession = {
+        token,
+        ...(approved.runtimeUrl ? { runtimeUrl: approved.runtimeUrl } : {}),
+        ...(httpBase ? { httpBase } : {}),
+      };
+      await savePairingSession(session);
+      dispatch({
+        type: 'APPROVED',
+        token,
+        approved,
+        ...(httpBase ? { httpBase } : {}),
+      });
     } catch (err) {
       dispatch({
         type: 'FAILED',
@@ -185,7 +229,7 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
 
   const resetPairing = useCallback(async () => {
     try {
-      await clearPairingToken();
+      await clearPairingSession();
     } catch {
       // Swallow store errors on clear — there's nothing the user can do
       // about a wiped Keychain entry that already isn't there.
@@ -195,6 +239,7 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
     if (gatewayRef.current instanceof RealGateway) {
       gatewayRef.current.disconnect();
     }
+    httpBaseRef.current = undefined;
     setReconnectState(null);
     dispatch({ type: 'RESET' });
   }, []);

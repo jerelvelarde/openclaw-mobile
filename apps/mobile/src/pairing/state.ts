@@ -40,6 +40,14 @@ export interface PairingState {
   approved?: PairingApproved;
   /** Persisted bearer token once approval lands. */
   token?: Token;
+  /**
+   * Absolute CopilotKit runtime URL the desktop advertised at pairing
+   * time. Populated on `APPROVED` and on `LOADED_TOKEN` when the session
+   * record carried it (P05A+). Consumed by the CopilotKit provider.
+   */
+  runtimeUrl?: string;
+  /** HTTP base the phone paired against — used as runtime-URL fallback. */
+  httpBase?: string;
   /** Human-readable error for the `error` state. */
   error?: string;
 }
@@ -57,12 +65,17 @@ export interface PairingState {
  */
 export type PairingEvent =
   | { type: 'START' }
-  | { type: 'HOST_SELECTED'; hostId: string }
+  | { type: 'HOST_SELECTED'; hostId: string; httpBase?: string }
   | { type: 'CODE_ISSUED'; code: string; expiresAt: number }
-  | { type: 'APPROVED'; token: Token; approved: PairingApproved }
+  | { type: 'APPROVED'; token: Token; approved: PairingApproved; httpBase?: string }
   | { type: 'FAILED'; error: string }
   | { type: 'RESET' }
-  | { type: 'LOADED_TOKEN'; token: Token };
+  | {
+      type: 'LOADED_TOKEN';
+      token: Token;
+      runtimeUrl?: string;
+      httpBase?: string;
+    };
 
 /** Starting state when the provider first mounts (before token load). */
 export const initialPairingState: PairingState = { status: 'idle' };
@@ -83,7 +96,11 @@ export function pairingReducer(state: PairingState, event: PairingEvent): Pairin
       // Only meaningful while discovering; ignore otherwise so a stray tap
       // from a dev-only "approve" button can't rewind a paired session.
       if (state.status !== 'discovering') return state;
-      return { status: 'requesting', hostId: event.hostId };
+      return {
+        status: 'requesting',
+        hostId: event.hostId,
+        ...(event.httpBase ? { httpBase: event.httpBase } : {}),
+      };
 
     case 'CODE_ISSUED':
       // The provider calls `requestPairing()` after `HOST_SELECTED`; only
@@ -106,6 +123,8 @@ export function pairingReducer(state: PairingState, event: PairingEvent): Pairin
         // Preserve the code on the paired state for diagnostics only; it's
         // not used as an auth credential after this point.
         code: state.code,
+        runtimeUrl: event.approved.runtimeUrl,
+        ...(event.httpBase ? { httpBase: event.httpBase } : {}),
       };
 
     case 'FAILED':
@@ -120,7 +139,12 @@ export function pairingReducer(state: PairingState, event: PairingEvent): Pairin
       // The provider calls this once on mount if it finds a persisted token.
       // We trust the store and jump straight to `paired`; expired-token
       // handling lands when the real WS client emits `token_expired` in P04A.
-      return { status: 'paired', token: event.token };
+      return {
+        status: 'paired',
+        token: event.token,
+        ...(event.runtimeUrl ? { runtimeUrl: event.runtimeUrl } : {}),
+        ...(event.httpBase ? { httpBase: event.httpBase } : {}),
+      };
 
     default: {
       // Exhaustiveness guard — if a new event variant is added, TS errors here.
