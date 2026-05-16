@@ -121,6 +121,9 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
         - `canvas.event { surfaceId, nodeId, type, payload }` — mobile renderers POST these on user interaction; the stub doesn't subscribe to the topic so the events are silently dropped at the WS boundary. No agent loop is wired to consume them either.
       Concretely, the stub should: (a) keep an in-memory map of surfaces it has emitted, (b) handle `canvas.get` with `ctx.reply('canvas.get.response', { surface })`, (c) on `canvas.event` log + ack so the mobile sees a response, and ideally (d) emit a follow-up `canvas.patch` when the event would mutate the surface (e.g. set the heading text to `"Clicked!"`). Until that lands, the inline canvas surface renders correctly from the initial push but is interaction-dead — useful for visual review, not for real round-trips. Tracks alongside open question #26 (other deferred WS topics).
 
+31. **Canvas frame routing vs `ThreadEvent` variant** `[protocol]`
+    - P06B's plan prose described surfaces arriving as `ThreadEvent { type: "canvas", surfaceId }` inside the thread stream; the v1 schema (P06.0) doesn't have that variant. Both renderers (P06A mobile + P06B desktop) currently treat `canvas.*` WS frames as a sibling channel and synthesize a placeholder list entry with `surfaceId` for inline rendering. Decision needed before we grow more canvas surface kinds: (a) add `ThreadEvent` `{ type: "canvas", ... }` so canvas events live in the chat stream and ordering is naturally preserved, or (b) formalise the sibling channel (`canvas.*` frames carry their own correlation, with the renderer responsible for merging). Option (a) couples canvas to threads, but is closer to how the chat surface already thinks. Option (b) keeps canvas independent of chat context, useful if we add a "Canvas" tab. Revisit before any plan extends Canvas (e.g. user-driven `canvas.open`).
+
 ---
 
 ## B. Decisions we can make as we go
