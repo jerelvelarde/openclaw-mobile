@@ -7,8 +7,8 @@ Hermes ecosystem rather than forking it.
 
 ## The picture
 
-- **Host hardware:** always-on Mac mini (see `host-target.md`).
-- **Desktop companion:** **`openclaw-desktop`** (Electron, sibling repo — see `desktop-app.md`). Supervises the gateway, handles pairing approvals, advertises Bonjour, fans out push notifications.
+- **Host hardware:** always-on Mac — Mac mini or docked MacBook (see `host-target.md`).
+- **Desktop companion:** **`apps/desktop`** (Electron, in this monorepo — see `desktop-app.md`). Supervises the gateway, handles pairing approvals, advertises Bonjour, fans out push notifications.
 - **Harness:** [OpenClaw](https://github.com/openclaw/openclaw) gateway daemon, supervised by the desktop app.
 - **Agents:** any agent OpenClaw can route to. Day-one targets:
   - OpenClaw's own skill agents (workspace at `~/.openclaw/workspace`, skills as `AGENTS.md` / `SOUL.md` / `TOOLS.md`).
@@ -16,7 +16,7 @@ Hermes ecosystem rather than forking it.
 - **Mobile app:** an OpenClaw "device node" — pairs to the gateway over WebSocket via the desktop app, surfaces chat + Canvas + voice, never runs an agent itself.
 
 ```
-phone (this app) ──WSS──► openclaw-desktop (Electron) ──IPC──► openclaw gateway :18789 ──► agent (Hermes / skill) ──► LLM provider
+phone (this app) ──WSS──► apps/desktop (Electron) ──IPC──► openclaw gateway :18789 ──► agent (Hermes / skill) ──► LLM provider
                                    │                                       │
                                    └─ Bonjour, pairing UI,                 └─ other channels (Telegram, WA, Slack, …)
                                       push fan-out, supervision
@@ -28,8 +28,8 @@ phone (this app) ──WSS──► openclaw-desktop (Electron) ──IPC──�
 
 | Concern               | Approach                                                                                  |
 | --------------------- | ----------------------------------------------------------------------------------------- |
-| Install / run         | Recommended: install `openclaw-desktop` (signed `.dmg`); it installs and supervises the gateway. Fallback: `openclaw onboard --install-daemon` + manual `openclaw gateway --port 18789`. |
-| Pairing               | Mirror OpenClaw's DM pairing-code UX. Approval happens in the **openclaw-desktop** UI / macOS notification (fallback: `openclaw pairing approve mobile <code>` CLI). |
+| Install / run         | Recommended: install `apps/desktop` (signed `.dmg`); it installs and supervises the gateway. Fallback: `openclaw onboard --install-daemon` + manual `openclaw gateway --port 18789`. |
+| Pairing               | Mirror OpenClaw's DM pairing-code UX. Approval happens in the **apps/desktop** UI / macOS notification (fallback: `openclaw pairing approve mobile <code>` CLI). |
 | Transport             | WebSocket to the gateway, advertised by the desktop app at pairing time (`ws://host:18789` on LAN, `wss://…` via Tailscale or relay). |
 | Workspace             | Neither app writes to `~/.openclaw/workspace`. v1 reads agent/skill list only.            |
 | Multi-agent routing   | Use the gateway's built-in router; both apps expose "active agent" switching in their UI. |
@@ -39,7 +39,7 @@ phone (this app) ──WSS──► openclaw-desktop (Electron) ──IPC──�
 ### Adapter strategy (only if needed)
 
 If OpenClaw's WS protocol doesn't map directly onto CopilotKit's runtime
-contract, the **openclaw-desktop** Electron app embeds the adapter
+contract, the **apps/desktop** Electron app embeds the adapter
 in-process:
 
 - Listens on a local HTTP port (e.g. `:18790`).
@@ -74,7 +74,7 @@ This keeps the door open for swapping in other agents (or future Nous projects) 
 
 ## Conformance checklist (run before tagging v1)
 
-- [ ] Pairing works end-to-end via `openclaw-desktop` on a real Mac mini + upstream `openclaw gateway`, no fork of either.
+- [ ] Pairing works end-to-end via `apps/desktop` on a real Mac mini + upstream `openclaw gateway`, no fork of either.
 - [ ] CLI-only fallback pairing (no desktop app) still works on a Linux host.
 - [ ] No writes to `~/.openclaw/workspace` from either app.
 - [ ] `listAgents()` correctly reflects both OpenClaw skills and a Hermes-routed agent when both are installed.

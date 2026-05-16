@@ -64,6 +64,15 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 11. **Branding / naming** `[both]`
     - Display name, bundle id (e.g. `dev.openclaw.mobile`, `dev.openclaw.desktop`), icon, color tokens.
 
+12. **Repo rename** `[root]`
+    - Repo is named `openclaw-mobile` but now contains both `apps/mobile` and `apps/desktop`. Rename to `openclaw` (or similar) before public traffic, or keep for continuity? GitHub redirects, so renaming is cheap but external links should be updated.
+
+13. **Package manager** `[root]`
+    - P00 defaults to **pnpm** (best for monorepos with multiple frameworks). Confirm before P00 runs, or switch to npm/yarn workspaces if there's a reason.
+
+14. **`@openclaw/` npm scope** `[root]`
+    - We use `@openclaw/protocol`, `@openclaw/mobile`, `@openclaw/desktop` as workspace names. If we ever publish `@openclaw/protocol`, we need to claim the scope on npm. Defer until publish.
+
 ---
 
 ## B. Decisions we can make as we go

@@ -3,11 +3,26 @@
 A mobile **device node** for [OpenClaw](https://github.com/openclaw/openclaw),
 the local-first personal-AI gateway that runs as a daemon on your own machine.
 
-The v1 design assumes a single, concrete host shape: an **always-on Mac mini
-(or equivalent) sitting at home**, running `openclaw gateway` 24/7. The phone
-finds it on the LAN via Bonjour, pairs once, and reconnects from anywhere
-(cellular, Tailscale, work Wi-Fi) using the same token. See `host-target.md`
-for the full host profile and what we ask the user to set up once.
+The v1 design assumes a single, concrete host shape: an **always-on Mac
+(Mac mini or MacBook left plugged in)**, running `openclaw gateway` 24/7. The
+phone finds it on the LAN via Bonjour, pairs once, and reconnects from
+anywhere (cellular, Tailscale, work Wi-Fi) using the same token. See
+`host-target.md` for the full host profile and what we ask the user to set
+up once.
+
+This repo is a **pnpm workspace monorepo** containing both apps:
+
+```
+openclaw-mobile/            (repo root — name TBD, see open-questions.md)
+├── apps/
+│   ├── mobile/             # Expo / React Native / Web
+│   └── desktop/            # Electron menu-bar app
+├── packages/
+│   └── protocol/           # @openclaw/protocol — shared types, schemas, GatewayClient
+├── .chalk/                 # planning docs + sub-agent plans
+├── pnpm-workspace.yaml
+└── package.json
+```
 
 This app pairs to that gateway over WebSocket and becomes another surface for
 your agents — chat, Canvas, voice — alongside the messaging channels OpenClaw
@@ -20,8 +35,9 @@ The agents themselves are pluggable. We're explicitly compatible with:
 
 Built with **Expo (React Native + Web)** and **CopilotKit's React Native
 runtime** for the chat surface. See `host-target.md` for host assumptions,
-`compatibility.md` for the harness/agent matrix, and `milestones.md` for
-delivery.
+`compatibility.md` for the harness/agent matrix, `desktop-app.md` for the
+Electron companion's contract, and `master-plan.md` + `plans/` for the
+sub-agent-dispatchable delivery plan.
 
 ---
 
@@ -54,39 +70,40 @@ delivery.
 ## 3. How the pieces fit
 
 We mirror the **Claude desktop + Claude mobile** pattern: a desktop companion
-runs on the always-on Mac mini and is the primary surface for the user when
+runs on the always-on Mac and is the primary surface for the user when
 they're at their desk; the mobile app is the same persona, reachable
-anywhere. Both speak to the same OpenClaw gateway. This means **two apps**
-plus the upstream gateway:
+anywhere. Both speak to the same OpenClaw gateway. This means **two apps in
+one monorepo**, plus the upstream gateway:
 
-- **`openclaw-mobile`** (this repo) — Expo / React Native phone + web client.
-- **`openclaw-desktop`** (sibling repo, to be created) — Electron menu-bar app that wraps and supervises the OpenClaw gateway daemon on the Mac mini, exposes a desktop chat UI, and is the "trust anchor" for device pairing.
-- **`openclaw`** (upstream) — the gateway daemon + skills/agents.
+- **`apps/mobile`** — Expo / React Native phone + web client.
+- **`apps/desktop`** — Electron menu-bar app that wraps and supervises the OpenClaw gateway daemon on the Mac, exposes a desktop chat UI, and is the "trust anchor" for device pairing.
+- **`packages/protocol`** — `@openclaw/protocol`: shared TS types, Zod schemas, and the `GatewayClient` interface used by both apps. The single source of truth for wire format.
+- **`openclaw`** (upstream, external) — the gateway daemon + skills/agents.
 
 ```
 ┌────────────────────────┐                ┌────────────────────────────────────────┐
-│  openclaw-mobile       │                │  Mac mini (always-on)                  │
+│  apps/mobile           │                │  Always-on Mac (mini or MacBook)       │
 │  (Expo: iOS/Android/Web)│               │                                        │
 │  - Pairing UI          │  ── WSS ──►   │  ┌──────────────────────────────────┐  │
-│  - CopilotKit chat     │  (Bonjour /    │  │  openclaw-desktop (Electron)     │  │
+│  - CopilotKit chat     │  (Bonjour /    │  │  apps/desktop (Electron)         │  │
 │  - Canvas renderer     │   Tailscale)   │  │  - Menu bar / tray icon          │  │
 │  - Voice (PTT)         │                │  │  - Pairing approvals             │  │
-└────────────────────────┘                │  │  - Desktop chat + Canvas         │  │
-                                          │  │  - Settings / agents / logs      │  │
-                                          │  │  - Supervises gateway daemon     │  │
-                                          │  └──────────┬───────────────────────┘  │
-                                          │             │ local IPC                │
-                                          │             ▼                          │
-                                          │  openclaw gateway :18789 (launchd)     │
-                                          │   ├─ workspace ~/.openclaw/workspace   │
-                                          │   ├─ skills (AGENTS.md/SOUL.md/...)    │
-                                          │   ├─ multi-agent router                │
-                                          │   └─ channels (WA, TG, Slack, …)       │
-                                          │                                        │
-                                          │  Agent process(es):                    │
-                                          │   • OpenClaw built-in skill agents     │
-                                          │   • hermes-agent (Nous Research)       │
-                                          │     + any LLM provider it's wired to   │
+└──────────┬─────────────┘                │  │  - Desktop chat + Canvas         │  │
+           │                              │  │  - Settings / agents / logs      │  │
+           │ depends on                   │  │  - Supervises gateway daemon     │  │
+           │                              │  └──────────┬───────────────────────┘  │
+           ▼                              │             │ local IPC                │
+┌────────────────────────┐                │             ▼                          │
+│  packages/protocol     │ ◄──depends on──┼──┐  openclaw gateway :18789 (launchd) │
+│  @openclaw/protocol    │                │  │   ├─ workspace ~/.openclaw/...     │
+│  - Wire types          │                │  │   ├─ skills (AGENTS/SOUL/TOOLS.md) │
+│  - Zod schemas         │                │  │   ├─ multi-agent router            │
+│  - GatewayClient iface │                │  │   └─ channels (WA, TG, Slack, …)   │
+│  - Mock gateway        │                │  │                                    │
+└────────────────────────┘                │  │  Agent process(es):                │
+                                          │  │   • OpenClaw built-in skill agents │
+                                          │  │   • hermes-agent (Nous Research)   │
+                                          │  │     + any LLM provider             │
                                           └────────────────────────────────────────┘
 ```
 
@@ -131,14 +148,14 @@ network-bound. Pair once on LAN, then reconnect from anywhere.
 
 ## 5. Information architecture
 
-Expo Router tree:
+Expo Router tree under `apps/mobile/app/`:
 
 ```
-app/
+apps/mobile/app/
   (pairing)/
-    welcome.tsx              # "Make sure openclaw-desktop is running on your Mac"
+    welcome.tsx              # "Make sure apps/desktop is running on your Mac"
     discover.tsx             # Bonjour scan → pick discovered host (or paste URL)
-    code.tsx                 # show 6-digit pairing code; user approves in openclaw-desktop
+    code.tsx                 # show 6-digit pairing code; user approves in apps/desktop
   (tabs)/
     index.tsx                # Home: active agent, recent threads, quick voice CTA
     threads/
@@ -274,6 +291,7 @@ Tracked in `open-questions.md`. Highlights:
 - Push notification (driven by the always-on Mac) when an agent pings while the app is backgrounded.
 - No crashes on the golden path; tests cover the gateway client and the pairing reducer.
 
-See `milestones.md` for sequencing, `host-target.md` for Mac mini assumptions,
-`desktop-app.md` for the Electron companion, and `compatibility.md` for the
-harness/agent matrix.
+See `master-plan.md` for the sub-agent dispatch order, `plans/` for the
+per-task plan files, `host-target.md` for Mac assumptions, `desktop-app.md`
+for the Electron companion, and `compatibility.md` for the harness/agent
+matrix.

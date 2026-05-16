@@ -1,7 +1,7 @@
 # Host target — Mac mini (always-on)
 
-This app is designed against one concrete host shape: a **Mac mini (or any
-always-on Apple Silicon Mac) sitting at home**, running the
+This app is designed against one concrete host shape: a **always-on Apple Silicon Mac
+(Mac mini or a MacBook left docked) sitting at home**, running the
 **`openclaw-desktop`** Electron companion (which supervises the OpenClaw
 gateway daemon) 24/7. See `desktop-app.md` for the desktop app's contract.
 

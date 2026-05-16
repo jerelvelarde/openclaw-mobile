@@ -1,21 +1,32 @@
-# openclaw-desktop — the Electron companion (sibling repo)
+# apps/desktop — the Electron companion
 
 We're following the **Claude pattern**: a desktop app that lives on the user's
-always-on machine + a mobile app that pairs with it. This document specifies
-the desktop app from the mobile app's perspective — the contract it has to
-expose so this repo can ship against it.
+always-on Mac (mini or MacBook) + a mobile app that pairs with it. This
+document specifies the desktop app's responsibilities and the contract it
+exposes to `apps/mobile`.
 
-The desktop app lives in its own repo (suggested name: **`openclaw-desktop`**)
-because:
+Both apps live in this monorepo:
 
-- It has a different stack (Electron + Node, not React Native).
-- It needs to be code-signed and notarized for macOS separately.
-- It will eventually want Windows/Linux builds too, with their own quirks.
-- Splitting the repos keeps the mobile bundle small and lets each ship on its own cadence.
+```
+apps/
+  mobile/      # Expo / React Native — what the phone runs
+  desktop/     # Electron — what the always-on Mac runs
+packages/
+  protocol/    # @openclaw/protocol — shared types/schemas/GatewayClient
+```
 
-This file lives in the mobile repo because mobile-side design decisions
-(pairing UX, transports, push, voice) depend on what the desktop app
-guarantees.
+Keeping them in one repo (vs. siblings) buys:
+
+- One PR can change the wire format on both sides atomically.
+- `@openclaw/protocol` is consumed via pnpm `workspace:*` — no publish cycle for protocol churn during early dev.
+- Shared CI, shared lint config, single dependency lockfile.
+- Easier code review for cross-app changes.
+
+Costs we accept:
+
+- Electron-specific deps live in the same lockfile as RN deps (mitigated by pnpm's isolated `node_modules`).
+- CI matrix has to cover both apps.
+- The repo name `openclaw-mobile` is now slightly misleading — flagged for renaming in `open-questions.md`.
 
 ---
 
@@ -24,7 +35,7 @@ guarantees.
 The raw OpenClaw CLI + launchd daemon works, but it's not a product
 experience. The Electron app turns it into one:
 
-| Need                                       | CLI alone               | With openclaw-desktop                         |
+| Need                                       | CLI alone               | With apps/desktop                         |
 | ------------------------------------------ | ----------------------- | --------------------------------------------- |
 | Daemon supervision & auto-update           | manual launchctl        | Electron supervises, prompts for updates      |
 | Pairing approval                           | type a command          | tap "Approve" in a notification               |
@@ -65,7 +76,7 @@ The desktop app MAY:
 ## 3. Pairing flow (cross-app sequence)
 
 ```
-phone (openclaw-mobile)                Mac mini (openclaw-desktop + gateway)
+phone (openclaw-mobile)                Mac mini (apps/desktop + gateway)
 ─────────────────────────────────      ───────────────────────────────────
 1. user opens app, first run
 2. Bonjour scan finds         ◄────►   3. desktop advertises _openclaw._tcp
@@ -93,23 +104,25 @@ This is the same flow whether the user is on LAN (Bonjour) or remote
 
 ## 4. Shared package: `@openclaw/protocol`
 
-Both repos depend on a shared TypeScript package that owns:
+Both apps depend on `packages/protocol` (`@openclaw/protocol`), which owns:
 
 - All WS message types (`PairingRequest`, `PairingApproved`, `ThreadEvent`, `CanvasPatch`, `VoiceFrame`, …).
 - Zod schemas for runtime validation at the WS boundary.
 - The `GatewayClient` interface (what `plan.md` §7 sketches).
 - Token format + signature verification helpers.
+- An in-memory mock gateway used by both apps in dev and tests.
 
-Owning this in one place means mobile and desktop can't drift. CI in both
-repos pulls the published package; for local dev we use a pnpm workspace
-when both repos are checked out side by side.
+Owning this in one workspace package means mobile and desktop can't drift.
+Apps reference it via `"@openclaw/protocol": "workspace:*"` so protocol
+changes are picked up instantly without a publish cycle. If we later need
+external consumers we publish from this same package.
 
 ---
 
 ## 5. Protocol surface (provisional)
 
 Until we read the OpenClaw source, this is our best guess at what
-`openclaw-desktop` should expose. It maps to the `GatewayClient` interface
+`apps/desktop` should expose. It maps to the `GatewayClient` interface
 on the mobile side.
 
 **HTTP (over the same port):**
@@ -130,32 +143,42 @@ mobile we code against the shared package, never against `fetch` directly.
 
 ---
 
-## 6. Cross-repo development workflow
+## 6. Monorepo development workflow
 
-When both repos are checked out:
+Single checkout, single install:
 
 ```
-~/code/
-  openclaw-mobile/    # this repo (Expo)
-  openclaw-desktop/   # Electron app (new repo)
-  protocol/           # @openclaw/protocol (shared)
+openclaw-mobile/             # repo root
+├── apps/
+│   ├── mobile/              # Expo
+│   └── desktop/             # Electron
+└── packages/
+    └── protocol/            # @openclaw/protocol
 ```
 
-A top-level pnpm workspace (or just `pnpm link`) makes `@openclaw/protocol`
-changes immediately visible to both. The mobile dev loop:
+Top-level scripts (see master-plan.md and plan P0):
 
-1. Start `openclaw-desktop` in dev (`pnpm dev` — opens Electron, supervises a dev gateway).
-2. Start the Expo dev server (`pnpm start`).
-3. Open the app on a real device (or simulator); Bonjour discovers the dev desktop; pair with one tap.
+- `pnpm install` — installs everything.
+- `pnpm --filter desktop dev` — runs Electron with a supervised dev gateway.
+- `pnpm --filter mobile start` — Expo dev server.
+- `pnpm -r typecheck` / `pnpm -r test` — across all workspaces.
 
-For mobile-only iteration, use the in-app **mock gateway** (see `milestones.md` M0–M1) — it implements the same `GatewayClient` interface without needing the desktop running.
+The mobile dev loop:
+
+1. `pnpm --filter desktop dev` — opens the Electron app.
+2. `pnpm --filter mobile start` — Expo dev server.
+3. Open the app on a device or simulator; Bonjour discovers the dev desktop; pair with one tap (you click "Approve" in the Electron window).
+
+For mobile-only iteration, use the in-app **mock gateway** from
+`packages/protocol` — it implements the same `GatewayClient` interface without
+needing the desktop running.
 
 ---
 
 ## 7. What this means for the mobile repo right now
 
 The mobile plan does not change scope — we're still shipping the Expo app
-described in `plan.md` and `milestones.md`. But we should:
+described in `plan.md` and broken down in `master-plan.md` + `plans/`. But we should:
 
 - Land the `GatewayClient` interface inside the mobile repo first.
 - Extract it into `@openclaw/protocol` once we start the desktop repo.
@@ -170,7 +193,7 @@ the mobile app so it cleanly meets the desktop when the desktop arrives.
 
 Tracked alongside the mobile open questions in `open-questions.md`:
 
-- Does OpenClaw upstream want us to contribute the Electron supervisor back, or is `openclaw-desktop` a separate community project?
+- Does OpenClaw upstream want us to contribute the Electron supervisor back, or is `apps/desktop` a separate community project?
 - Notarization signing identity (Anthropic team account, a new entity, or the user's own dev cert)?
 - Auto-update channel — Squirrel.Mac, electron-updater, or roll our own?
 - Where does the per-gateway signing keypair live (Keychain on macOS, presumably)?
