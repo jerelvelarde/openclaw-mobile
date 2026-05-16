@@ -56,8 +56,15 @@ When dispatching a plan to a sub-agent, pass:
 | P09A  | Mobile EAS build + release            | mobile        | 1d     | `plans/P09A-mobile-release.md`                |
 | P09B  | Desktop notarize + .dmg release       | desktop       | 1d     | `plans/P09B-desktop-release.md`               |
 | P09C  | Web deploy                            | mobile        | 0.5d   | `plans/P09C-web-deploy.md`                    |
+| P10.0 | OpenClaw upstream protocol survey     | root (doc)    | 1d     | `plans/P10.0-openclaw-source-survey.md`       |
+| P10A  | Real OpenClaw gateway bridge          | desktop       | 2–3d   | `plans/P10A-openclaw-bridge.md`               |
+| P10B  | Align `@openclaw/protocol` w/ upstream| protocol      | 0.5–2d | `plans/P10B-protocol-align-upstream.md`       |
+| P10C  | E2E against real `openclaw gateway`   | root          | 1d     | `plans/P10C-e2e-real-gateway.md`              |
+| P10D  | Upstream contributions (PRs)          | upstream      | open   | `plans/P10D-upstream-prs.md`                  |
 
-**Total estimated effort:** ~25 person-days. With 2 sub-agents running mobile and desktop in parallel: ~13–15 wall-clock days.
+**Total estimated effort:** ~25 person-days for Waves 1–13, plus 5–8 days for Wave 14 (P10.x). With 2 sub-agents running mobile and desktop in parallel: ~13–15 wall-clock days for Waves 1–13.
+
+**Current status (as of commit `1727cb4`):** Waves 1–12 complete. v0.1.0 dev preview tagged locally as `v0.1.0-dev-preview`. Wave 13 (release) deferred — needs Apple Developer + EAS + web host credentials. Wave 14 (upstream integration) starting next.
 
 ---
 
@@ -167,10 +174,17 @@ starting the next.
 - **P08A** — Mobile registration.
 - **P08B** — Desktop fan-out.
 
-### Wave 13 — Release (parallel × 3)
+### Wave 13 — Release (parallel × 3) — **deferred, needs credentials**
 - **P09A** — Mobile EAS / TestFlight / Play.
 - **P09B** — Desktop notarize / .dmg / auto-update.
 - **P09C** — Web deploy.
+
+### Wave 14 — Upstream OpenClaw integration (mostly sequential)
+- **P10.0** — OpenClaw source survey & spec (sequential, single agent). Documents the real upstream wire format and identifies deltas vs `@openclaw/protocol`.
+- **P10A** — Real OpenClaw gateway bridge (sequential, single agent). Replaces the in-process stub with supervision of the real `openclaw gateway` daemon. **Depends on P10.0**, and on P10B if non-trivial protocol changes are needed.
+- **P10B** — Protocol alignment (sequential, single agent). Updates `@openclaw/protocol` to match upstream where it diverges. **Depends on P10.0.** Can land before or with P10A.
+- **P10C** — End-to-end test against the real daemon (sequential, single agent). **Depends on P10A + P10B.**
+- **P10D** — Upstream contributions / PRs (open-ended, parallel-friendly). **Depends on P10.0** for the list. Doesn't block P10A/B/C.
 
 ---
 
