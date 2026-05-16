@@ -7,10 +7,12 @@
 //   GET  /pair/status         — phone polls until the user approves/denies.
 //   GET  /healthz             — used by mobile's Bonjour probe + dev curl.
 //
-// LAN exposure (binding to `0.0.0.0` / advertising via Bonjour) is P04B's
-// job — we DO NOT bind anywhere else here. WebSocket transport is P04B
-// too. The CopilotKit runtime adapter that `runtime_url` will eventually
-// point at lands in P05C; for now we return a placeholder URL.
+// P04B opens this server to the LAN (when `settings.lan_enabled === true`)
+// so Bonjour-discovered phones can reach it, and attaches the WS
+// transport on the same port. The CopilotKit runtime adapter that
+// `runtime_url` will eventually point at lands in P05C; for now we
+// return a placeholder URL built from the LAN hostname so the mobile
+// client uses the right address after pairing.
 //
 // The pending-pair table lives in-memory: pairing requests are transient
 // and don't survive a desktop restart on purpose (the user will just
@@ -25,8 +27,24 @@ import type { SigningKey } from './keypair';
 /** Default loopback port. Override via the `OPENCLAW_DESKTOP_PORT` env. */
 export const DEFAULT_PORT = 18789;
 
-/** Placeholder runtime URL returned at pairing time. Real adapter is P05C. */
-export const RUNTIME_URL_PLACEHOLDER = 'http://127.0.0.1:18789/copilot/runtime';
+/**
+ * Build the `runtime_url` value returned at pairing time. P04B now
+ * derives this from the LAN hostname so mobile can reach the runtime
+ * after pairing; loopback callers (dev tooling, the renderer chat UI)
+ * pass `host: '127.0.0.1'`. The actual `/copilot/runtime` adapter is
+ * implemented by P05C — this URL is the stable contract mobile
+ * stashes alongside the token.
+ */
+export function buildRuntimeUrl(host: string, port: number): string {
+  return `http://${host}:${port}/copilot/runtime`;
+}
+
+/**
+ * Legacy loopback placeholder kept around for the existing tests that
+ * compare against it. New callers should prefer `buildRuntimeUrl()` so
+ * the host matches the actual bind address.
+ */
+export const RUNTIME_URL_PLACEHOLDER = buildRuntimeUrl('127.0.0.1', DEFAULT_PORT);
 
 /** Default time-to-approve for a pending pairing request. */
 export const DEFAULT_PAIR_TTL_MS = 5 * 60 * 1000;
@@ -129,6 +147,13 @@ export interface BuildServerOptions {
   tokenTtlMs?: number;
   /** Inject the pending table — useful for tests. */
   pendingTable?: PendingPairTable;
+  /**
+   * Runtime URL handed back in `/pair/status` after approval. The main
+   * process passes a value built with `buildRuntimeUrl(hostname, port)`
+   * when LAN exposure is on. Defaults to the loopback placeholder so
+   * the existing tests keep working without wiring host detection.
+   */
+  runtimeUrl?: string;
 }
 
 /** Bundle returned from `buildPairingServer` for the main process to manage. */
@@ -154,6 +179,7 @@ export function buildPairingServer(opts: BuildServerOptions): PairingServer {
   const pending = opts.pendingTable ?? new PendingPairTable();
   const pairTtlMs = opts.pairTtlMs ?? DEFAULT_PAIR_TTL_MS;
   const tokenTtlMs = opts.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
+  const runtimeUrl = opts.runtimeUrl ?? RUNTIME_URL_PLACEHOLDER;
 
   const fastify = Fastify({ logger: false });
 
@@ -234,7 +260,7 @@ export function buildPairingServer(opts: BuildServerOptions): PairingServer {
     });
     pair.status = 'approved';
     pair.token = token;
-    pair.runtime_url = RUNTIME_URL_PLACEHOLDER;
+    pair.runtime_url = runtimeUrl;
     pair.device_id = deviceId;
     opts.deviceStore.addDevice({
       device_id: deviceId,

@@ -31,6 +31,13 @@ export interface BuildControllerOptions {
   getWindow: () => BrowserWindow | null;
   /** Electron's `Notification` constructor, or `null` on non-macOS dev. */
   Notification?: typeof Notification;
+  /**
+   * Optional override for the `runtime_url` value returned by
+   * `/pair/status` after approval. P04B passes the LAN URL when
+   * `settings.lan_enabled` is true; tests + P03B-era callers leave it
+   * `undefined` to use `RUNTIME_URL_PLACEHOLDER`.
+   */
+  runtimeUrl?: string;
 }
 
 function toPendingView(pair: PendingPair): PendingPairView {
@@ -62,6 +69,7 @@ export async function buildPairingController(
     gatewayId,
     deviceStore,
     version: opts.version,
+    runtimeUrl: opts.runtimeUrl,
     onPendingPair: (pair) => {
       const view = toPendingView(pair);
       // 1. Push the event to the renderer so an open modal updates.

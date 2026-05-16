@@ -10,7 +10,7 @@
 // `./ipc-channels.ts` so main + preload can share them.
 
 import { contextBridge, ipcRenderer } from 'electron';
-import { IPC, PairedDeviceView, PendingPairView } from './ipc-channels';
+import { IPC, PairedDeviceView, PendingPairView, SettingsView } from './ipc-channels';
 
 const api = {
   /** Returns "pong". Smoke-test handle for the IPC bridge. */
@@ -58,6 +58,13 @@ const api = {
       return () => {
         ipcRenderer.removeListener(IPC.NAVIGATE, listener);
       };
+    },
+  },
+
+  settings: {
+    /** Return the current persisted settings. */
+    get: async (): Promise<SettingsView> => {
+      return (await ipcRenderer.invoke(IPC.SETTINGS_GET)) as SettingsView;
     },
   },
 } as const;

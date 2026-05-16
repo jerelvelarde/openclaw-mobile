@@ -11,6 +11,7 @@ import type { Agent } from '@openclaw/protocol';
 import { useEffect, useState } from 'react';
 import { ApprovePairing } from './pages/ApprovePairing';
 import { PairedDevices } from './pages/PairedDevices';
+import { Settings } from './pages/Settings';
 
 /**
  * Placeholder agent shown in the shell so the `Agent` type from
@@ -23,12 +24,13 @@ const PLACEHOLDER_AGENT: Agent = {
   description: 'Replaced once the gateway lands (P03B+).',
 };
 
-type Route = 'home' | 'approve' | 'devices';
+type Route = 'home' | 'approve' | 'devices' | 'settings';
 
 function parseHash(hash: string): Route {
   const normalized = hash.replace(/^#\/?/, '');
   if (normalized === 'approve') return 'approve';
   if (normalized === 'devices') return 'devices';
+  if (normalized === 'settings') return 'settings';
   return 'home';
 }
 
@@ -59,7 +61,8 @@ export function App(): JSX.Element {
     <main>
       <h1>openclaw-desktop</h1>
       <nav aria-label="primary">
-        <a href="#/">Home</a> · <a href="#/approve">Pairing</a> · <a href="#/devices">Devices</a>
+        <a href="#/">Home</a> · <a href="#/approve">Pairing</a> · <a href="#/devices">Devices</a> ·{' '}
+        <a href="#/settings">Settings</a>
       </nav>
       {route === 'home' ? (
         <>
@@ -71,6 +74,7 @@ export function App(): JSX.Element {
       ) : null}
       {route === 'approve' ? <ApprovePairing /> : null}
       {route === 'devices' ? <PairedDevices /> : null}
+      {route === 'settings' ? <Settings /> : null}
     </main>
   );
 }
