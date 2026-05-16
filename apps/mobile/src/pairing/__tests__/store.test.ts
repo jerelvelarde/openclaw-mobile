@@ -23,7 +23,16 @@ jest.mock('expo-secure-store', () => ({
   }),
 }));
 
-import { PAIRING_TOKEN_KEY, clearPairingToken, loadPairingToken, savePairingToken } from '../store';
+import {
+  PAIRING_SESSION_KEY,
+  PAIRING_TOKEN_KEY,
+  clearPairingSession,
+  clearPairingToken,
+  loadPairingSession,
+  loadPairingToken,
+  savePairingSession,
+  savePairingToken,
+} from '../store';
 
 const FAKE_TOKEN: Token = { value: 'tok_round_trip', expiresAt: 9_999_999_999_999 };
 
@@ -64,6 +73,47 @@ describe('pairing token store (native default — Platform.OS=ios)', () => {
       JSON.stringify({ value: 'tok', expiresAt: 'soon' }),
     );
     expect(await loadPairingToken()).toBeNull();
+  });
+
+  describe('session round-trip (P05A)', () => {
+    it('saves + reloads runtimeUrl + httpBase alongside the token', async () => {
+      await savePairingSession({
+        token: FAKE_TOKEN,
+        runtimeUrl: 'http://192.168.1.42:18789/copilot/runtime',
+        httpBase: 'http://192.168.1.42:18789',
+      });
+      const loaded = await loadPairingSession();
+      expect(loaded).toEqual({
+        token: FAKE_TOKEN,
+        runtimeUrl: 'http://192.168.1.42:18789/copilot/runtime',
+        httpBase: 'http://192.168.1.42:18789',
+      });
+      // savePairingSession also writes the legacy token entry so existing
+      // callers keep working without migration.
+      expect(await loadPairingToken()).toEqual(FAKE_TOKEN);
+    });
+
+    it('falls back to a legacy token entry when no session is present', async () => {
+      await savePairingToken(FAKE_TOKEN);
+      const loaded = await loadPairingSession();
+      expect(loaded).toEqual({ token: FAKE_TOKEN });
+    });
+
+    it('clearPairingSession removes both records', async () => {
+      await savePairingSession({
+        token: FAKE_TOKEN,
+        runtimeUrl: 'http://x:1/copilot/runtime',
+      });
+      await clearPairingSession();
+      expect(await loadPairingSession()).toBeNull();
+      expect(await loadPairingToken()).toBeNull();
+      expect(mockSecureStoreMemory.has(PAIRING_SESSION_KEY)).toBe(false);
+    });
+
+    it('returns null when the session blob is corrupt', async () => {
+      mockSecureStoreMemory.set(PAIRING_SESSION_KEY, '{not valid json');
+      expect(await loadPairingSession()).toBeNull();
+    });
   });
 });
 
