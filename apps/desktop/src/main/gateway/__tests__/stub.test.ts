@@ -105,4 +105,62 @@ describe('stub gateway', () => {
     stub.detach();
     expect(router._topics()).toHaveLength(0);
   });
+
+  it('emits a canned transcript + PCM16 reply clip on a voice offer (P07B)', async () => {
+    const { router, captured } = setupCapture();
+    attachStubGateway(router, { replyDelayMs: 0, voiceReplyDelayMs: 0 });
+
+    router.dispatchRaw(
+      frame('voice.s1.signal', 'voice.signal', { type: 'offer', sdp: 'v=0\nphone-offer' }),
+      { deviceId: 'phone-1' },
+    );
+    // Two microtask drains: one for dispatch, one for the queued canned reply.
+    await new Promise<void>((r) => queueMicrotask(r));
+    await new Promise<void>((r) => queueMicrotask(r));
+
+    const transcript = captured.find(
+      (f) => f.topic === 'voice.s1.transcript' && f.type === 'voice.transcript',
+    );
+    expect(transcript).toBeDefined();
+    const tp = transcript!.payload as { text: string; isFinal: boolean };
+    expect(tp.isFinal).toBe(true);
+    expect(tp.text.length).toBeGreaterThan(0);
+
+    // The synthetic reply emits 20 frames of 10ms PCM16 each.
+    const replyFrames = captured.filter(
+      (f) => f.topic === 'voice.s1.frame' && f.type === 'voice.frame.reply',
+    );
+    expect(replyFrames).toHaveLength(20);
+    const wire = replyFrames[0]!.payload as { samples: number[]; sampleRate: number };
+    expect(wire.sampleRate).toBe(16_000);
+    expect(wire.samples).toHaveLength(160); // 16kHz / 100Hz frames = 160 samples.
+    // Samples are signed 16-bit ints — confirm shape, not exact values.
+    expect(wire.samples.every((s) => Number.isInteger(s) && s >= -32_768 && s <= 32_767)).toBe(
+      true,
+    );
+  });
+
+  it('does not re-fire the voice reply on subsequent ICE candidates', async () => {
+    const { router, captured } = setupCapture();
+    attachStubGateway(router, { replyDelayMs: 0, voiceReplyDelayMs: 0 });
+
+    router.dispatchRaw(
+      frame('voice.s2.signal', 'voice.signal', { type: 'offer', sdp: 'v=0\noffer' }),
+      { deviceId: 'p' },
+    );
+    await new Promise<void>((r) => queueMicrotask(r));
+    await new Promise<void>((r) => queueMicrotask(r));
+    const before = captured.length;
+
+    // A flood of ICE candidates shouldn't re-trigger the canned reply.
+    for (let i = 0; i < 5; i += 1) {
+      router.dispatchRaw(
+        frame('voice.s2.signal', 'voice.signal', { type: 'ice', candidate: `cand:${i}` }),
+        { deviceId: 'p' },
+      );
+    }
+    await new Promise<void>((r) => queueMicrotask(r));
+    await new Promise<void>((r) => queueMicrotask(r));
+    expect(captured.length).toBe(before);
+  });
 });
