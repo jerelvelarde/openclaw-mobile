@@ -1,50 +1,123 @@
 // Pairing — discover screen.
 //
-// For P03A this hardcodes a single "Mock Mac mini" entry that proxies to the
-// in-memory mock gateway. Real Bonjour browse (and the "paste URL" input
-// becoming functional) lands in P04A — `react-native-zeroconf` requires a
-// custom dev client which is outside P03A's scope. The disabled paste-URL
-// field stays here so the IA matches `.chalk/plan.md` §5.
+// P04A: real Bonjour browse via `react-native-zeroconf` (wrapped in
+// `src/openclaw/transport/bonjour.ts`). Tap a host → kicks off the real
+// HTTP pairing flow against `httpBase`. Below the list lives the
+// "Paste URL" fallback for Tailscale / ngrok / remote hosts.
+//
+// Web fallback: the bonjour wrapper returns a no-op on web, so the list
+// stays empty there and the user uses the paste-URL input. That matches
+// the v1 reachability tiers in `.chalk/plan.md` §3.
 
 import { useRouter } from 'expo-router';
-import { useEffect } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { browse, resolveHttpBase, type DiscoveredHost } from '../../src/openclaw/gateway';
 import { usePairing } from '../../src/pairing/PairingProvider';
 import { colors, fontSize, radius, spacing } from '../../src/theme';
 
-const MOCK_HOST = {
-  id: 'mock-mac-mini',
-  name: 'Mock Mac mini',
-  hint: 'In-memory mock gateway (P03A) — real Bonjour browse lands in P04A',
-};
+/**
+ * Debounce window for emitting a fresh list. Bonjour resolves can arrive in
+ * bursts (e.g. on a switch between cellular and Wi-Fi) — we coalesce a few
+ * frames worth so we re-render once instead of N times.
+ */
+const DISCOVERY_DEBOUNCE_MS = 200;
 
 export default function PairingDiscoverScreen() {
   const router = useRouter();
   const { state, selectHost, error } = usePairing();
 
-  // Once the gateway issues a code, advance to the code screen. Doing this in
-  // an effect (vs. inline after `selectHost`) keeps the navigation reactive
-  // to state changes — if a re-render happens mid-flight, we still navigate.
+  /**
+   * Map of `host.id → DiscoveredHost`. We keep a stable record vs. an array
+   * so onFound/onLost can be O(1) and so React's list keying stays
+   * predictable across rapid Bonjour updates.
+   */
+  const [hosts, setHosts] = useState<Record<string, DiscoveredHost>>({});
+  const [pasteUrl, setPasteUrl] = useState('');
+  const [pasteError, setPasteError] = useState<string | null>(null);
+
+  // Pending host map mutated synchronously by the bonjour callbacks. We
+  // commit it into React state on a debounce so a burst of events
+  // produces a single render. The ref pattern (vs. setState in the
+  // callback) keeps the debounce simple — we don't need any closures over
+  // the prior `hosts` value.
+  const pending = useRef<Record<string, DiscoveredHost>>({});
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    pending.current = {};
+    const flush = () => {
+      debounceRef.current = null;
+      setHosts({ ...pending.current });
+    };
+    const queueFlush = () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(flush, DISCOVERY_DEBOUNCE_MS);
+    };
+
+    const unsub = browse({
+      onFound: (host) => {
+        pending.current[host.id] = host;
+        queueFlush();
+      },
+      onLost: (id) => {
+        delete pending.current[id];
+        queueFlush();
+      },
+      // Errors from the native browser are surfaced via the pairing
+      // reducer's `error` so the existing error row picks them up. We
+      // don't dispatch FAILED — discovery is best-effort, and falling
+      // back to the paste-URL flow is always available.
+      onError: () => {
+        /* swallow — the empty list is signal enough */
+      },
+    });
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      unsub();
+    };
+  }, []);
+
+  // Once the gateway issues a code, advance to the code screen. Doing this
+  // in an effect (vs. inline after `selectHost`) keeps the navigation
+  // reactive to state changes — if a re-render happens mid-flight, we
+  // still navigate.
   useEffect(() => {
     if (state.status === 'awaiting_approval') {
       router.push('/(pairing)/code');
     }
   }, [state.status, router]);
 
-  const onSelect = async () => {
-    // `Device.modelName` would be ideal here but `expo-device` isn't in the
-    // mobile package's deps yet (P02A only pulled in the routing essentials).
-    // For P03A a friendly placeholder is enough — the mock doesn't read it,
-    // and the real desktop UI's "Pair iPhone (Name)" copy is wired up when
-    // we add `expo-device` alongside the real WS client in P04A.
-    await selectHost(MOCK_HOST.id, 'OpenClaw mobile');
+  const onSelectHost = async (host: DiscoveredHost) => {
+    await selectHost(host.id, 'OpenClaw mobile', host.httpBase);
+  };
+
+  const onSubmitPasteUrl = async () => {
+    setPasteError(null);
+    if (!pasteUrl.trim()) {
+      setPasteError('Enter a URL to pair manually');
+      return;
+    }
+    let httpBase: string;
+    try {
+      httpBase = resolveHttpBase(pasteUrl);
+    } catch (err) {
+      setPasteError(err instanceof Error ? err.message : 'Invalid URL');
+      return;
+    }
+    await selectHost(`pasted:${httpBase}`, 'OpenClaw mobile', httpBase);
   };
 
   const isBusy = state.status === 'requesting' || state.status === 'awaiting_approval';
+  const hostList = useMemo(() => Object.values(hosts), [hosts]);
 
   return (
-    <View style={styles.container} testID="pairing-discover">
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.container}
+      testID="pairing-discover"
+    >
       <View style={styles.header}>
         <Text style={styles.title}>Pick your Mac</Text>
         <Text style={styles.paragraph}>
@@ -52,19 +125,34 @@ export default function PairingDiscoverScreen() {
         </Text>
       </View>
 
-      <Pressable
-        accessibilityRole="button"
-        style={[styles.hostRow, isBusy && styles.hostRowBusy]}
-        disabled={isBusy}
-        onPress={onSelect}
-        testID="pairing-discover-host"
-      >
-        <View>
-          <Text style={styles.hostName}>{MOCK_HOST.name}</Text>
-          <Text style={styles.hostHint}>{MOCK_HOST.hint}</Text>
-        </View>
-        <Text style={styles.hostAction}>{isBusy ? 'Requesting…' : 'Pair'}</Text>
-      </Pressable>
+      <View style={styles.hostList}>
+        {hostList.length === 0 ? (
+          <Text style={styles.emptyHint} testID="pairing-discover-empty">
+            Searching for Macs on this Wi-Fi…
+          </Text>
+        ) : (
+          hostList.map((host) => (
+            <Pressable
+              key={host.id}
+              accessibilityRole="button"
+              style={[styles.hostRow, isBusy && styles.hostRowBusy]}
+              disabled={isBusy}
+              onPress={() => {
+                void onSelectHost(host);
+              }}
+              testID={`pairing-discover-host-${host.id}`}
+            >
+              <View style={styles.hostMeta}>
+                <Text style={styles.hostName}>{host.name}</Text>
+                <Text style={styles.hostHint}>
+                  {host.host}:{host.port}
+                </Text>
+              </View>
+              <Text style={styles.hostAction}>{isBusy ? 'Requesting…' : 'Pair'}</Text>
+            </Pressable>
+          ))
+        )}
+      </View>
 
       {error ? (
         <Text style={styles.error} testID="pairing-discover-error">
@@ -75,30 +163,49 @@ export default function PairingDiscoverScreen() {
       <View style={styles.pasteBlock}>
         <Text style={styles.pasteLabel}>Or paste a gateway URL</Text>
         <TextInput
-          editable={false}
-          placeholder="ws://… (available in P04A)"
+          value={pasteUrl}
+          onChangeText={setPasteUrl}
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!isBusy}
+          keyboardType="url"
+          placeholder="http://mac-mini.local:18789 or https://…"
           placeholderTextColor={colors.muted}
           style={styles.pasteInput}
           testID="pairing-discover-paste"
         />
+        <Pressable
+          accessibilityRole="button"
+          disabled={isBusy}
+          onPress={() => {
+            void onSubmitPasteUrl();
+          }}
+          style={[styles.pasteButton, isBusy && styles.hostRowBusy]}
+          testID="pairing-discover-paste-submit"
+        >
+          <Text style={styles.pasteButtonLabel}>Pair via URL</Text>
+        </Pressable>
+        {pasteError ? (
+          <Text style={styles.error} testID="pairing-discover-paste-error">
+            {pasteError}
+          </Text>
+        ) : null}
         <Text style={styles.pasteHint}>
-          Manual URL entry is wired up alongside the real WS client (P04A).
+          Use this for Tailscale MagicDNS, ngrok, or any non-LAN host.
         </Text>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    padding: spacing.lg,
-    gap: spacing.lg,
-  },
+  scroll: { flex: 1, backgroundColor: colors.bg },
+  container: { padding: spacing.lg, gap: spacing.lg },
   header: { gap: spacing.sm, marginTop: spacing.lg },
   title: { color: colors.text, fontSize: fontSize.xl, fontWeight: '600' },
   paragraph: { color: colors.muted, fontSize: fontSize.md, lineHeight: 22 },
+  hostList: { gap: spacing.sm },
+  emptyHint: { color: colors.muted, fontSize: fontSize.sm },
   hostRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -108,6 +215,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   hostRowBusy: { opacity: 0.6 },
+  hostMeta: { flexShrink: 1, paddingRight: spacing.sm },
   hostName: { color: colors.text, fontSize: fontSize.md, fontWeight: '600' },
   hostHint: { color: colors.muted, fontSize: fontSize.xs, marginTop: spacing.xs },
   hostAction: { color: colors.accent, fontSize: fontSize.md, fontWeight: '600' },
@@ -121,7 +229,14 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     color: colors.text,
     fontSize: fontSize.md,
-    opacity: 0.6,
   },
+  pasteButton: {
+    borderColor: colors.accent,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    alignItems: 'center',
+  },
+  pasteButtonLabel: { color: colors.accent, fontSize: fontSize.md, fontWeight: '600' },
   pasteHint: { color: colors.muted, fontSize: fontSize.xs },
 });

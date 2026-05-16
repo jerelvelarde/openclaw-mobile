@@ -94,6 +94,12 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 24. **Live `lan_enabled` toggle on desktop** `[desktop]`
     - P04B introduced `userData/settings.json` with `lan_enabled` (default `true`). The renderer Settings page renders the value read-only and the bind address is decided once at app start. Toggling at runtime would require closing the fastify listener, rebinding to the new host, and starting/stopping Bonjour in lockstep — fiddly because we'd also need to invalidate the runtime URL stored on already-paired devices. For v1 we accept "edit JSON + restart" as the workflow. Revisit when we have a packaged build whose users won't tolerate manual JSON edits.
 
+25. **Committed native projects from `expo prebuild`** `[mobile]` `[process]`
+    - P04A's adoption of `react-native-zeroconf` moves the mobile app off Expo Go to a custom dev client; the plan required running `npx expo prebuild` and committing the generated `apps/mobile/ios/` and `apps/mobile/android/` trees so EAS / CI can build without re-running prebuild. We checked in 55 native files (CocoaPods / Gradle stubs, Info.plist, AndroidManifest.xml, etc.) and removed `/ios` + `/android` from `apps/mobile/.gitignore`. Going forward, every change that affects native config (`app.config.ts`, a new Expo plugin, a new native dep) must be paired with a fresh `expo prebuild --clean` so the committed copies stay in sync. Decide before P09C wires EAS: do we (a) keep committing native projects long-term (current path), (b) regenerate them at build time in CI and `.gitignore` again, or (c) move to a `npx expo run:android/ios` workflow where prebuild happens lazily on the dev's box. Re-evaluate once EAS lands and we see how often the native copies churn.
+
+26. **Mobile WS protocol stubs await P05/P06** `[mobile]` `[desktop]`
+    - P04A's `RealGateway` implements the HTTP pairing surface end-to-end but leaves `listAgents` / `listThreads` / `postMessage` / `streamThread` as TODO stubs (return `[]` / throw a typed "pending" error). P04B's WS server + stub gateway now expose `agents.list`, `threads.post`, and a streamed reply, so the next step is to wire `RealGateway` to send/await frames using `@openclaw/protocol`'s envelope codec. Land that as part of P05A so the chat surface has real data. The WS close-code range `4001-4099` is reserved for `token_expired` per `RealGateway`'s `onClose` handler — confirm with P04B's WS implementation before promising that behavior.
+
 ---
 
 ## B. Decisions we can make as we go
