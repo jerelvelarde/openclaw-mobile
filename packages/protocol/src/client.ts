@@ -18,7 +18,7 @@ import type {
   Token,
   VoiceOpts,
   VoiceSession,
-} from "./types";
+} from './types';
 
 /** Removes a previously-registered listener. */
 export type Unsubscribe = () => void;
@@ -27,7 +27,7 @@ export type Unsubscribe = () => void;
  * Coarse connection-level events. Renderers wire these to status badges,
  * reconnect banners, and pairing-expiry toasts.
  */
-export type GatewayEvent = "connected" | "disconnected" | "error" | "token_expired";
+export type GatewayEvent = 'connected' | 'disconnected' | 'error' | 'token_expired';
 
 /** Payload passed to `GatewayClient.on` handlers, keyed by event. */
 export interface GatewayEventPayload {

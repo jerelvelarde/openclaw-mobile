@@ -58,7 +58,7 @@ export interface Thread {
 }
 
 /** Roles supported by a `Message`. Matches what the chat UI needs to render. */
-export type MessageRole = "user" | "assistant" | "system" | "tool";
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
 /** A persisted message in a thread. */
 export interface Message {
@@ -84,22 +84,22 @@ export interface MessageInput {
  */
 export type ThreadEvent =
   | {
-      type: "message";
+      type: 'message';
       message: Message;
     }
   | {
-      type: "token";
+      type: 'token';
       messageId: string;
       delta: string;
     }
   | {
-      type: "tool_call";
+      type: 'tool_call';
       messageId: string;
       toolName: string;
       args: Record<string, unknown>;
     }
   | {
-      type: "done";
+      type: 'done';
       messageId: string;
     };
 
@@ -130,7 +130,7 @@ export interface CanvasPatch {
 /** Caller options for opening a voice session. */
 export interface VoiceOpts {
   /** Push-to-talk vs continuous. */
-  mode: "ptt" | "continuous";
+  mode: 'ptt' | 'continuous';
   /** Sample rate the client will send frames at. */
   sampleRate: number;
 }
@@ -138,7 +138,7 @@ export interface VoiceOpts {
 /** Handle returned by `GatewayClient.openVoice`. Real frame shape lands in P07.0. */
 export interface VoiceSession {
   id: string;
-  mode: "ptt" | "continuous";
+  mode: 'ptt' | 'continuous';
   /** Tear down the voice session. */
   close(): Promise<void>;
 }

@@ -21,7 +21,7 @@ export type {
   CanvasPatch,
   VoiceOpts,
   VoiceSession,
-} from "./types";
+} from './types';
 
 export {
   TokenSchema,
@@ -36,10 +36,10 @@ export {
   CanvasSurfaceSchema,
   CanvasPatchSchema,
   VoiceOptsSchema,
-} from "./schemas";
+} from './schemas';
 
-export type { Envelope } from "./envelope";
-export { encode, decode, envelopeSchema } from "./envelope";
+export type { Envelope } from './envelope';
+export { encode, decode, envelopeSchema } from './envelope';
 
 export type {
   GatewayClient,
@@ -47,7 +47,7 @@ export type {
   GatewayEventPayload,
   PairingHandshake,
   Unsubscribe,
-} from "./client";
+} from './client';
 
-export type { InMemoryMockGatewayOptions } from "./mock";
-export { InMemoryMockGateway } from "./mock";
+export type { InMemoryMockGatewayOptions } from './mock';
+export { InMemoryMockGateway } from './mock';

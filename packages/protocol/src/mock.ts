@@ -22,14 +22,14 @@ import type {
   Token,
   VoiceOpts,
   VoiceSession,
-} from "./types";
+} from './types';
 import type {
   GatewayClient,
   GatewayEvent,
   GatewayEventPayload,
   PairingHandshake,
   Unsubscribe,
-} from "./client";
+} from './client';
 
 /** Tunable knobs for the mock — exposed so tests can run without real timers. */
 export interface InMemoryMockGatewayOptions {
@@ -44,14 +44,14 @@ export interface InMemoryMockGatewayOptions {
 
 const DEFAULT_AGENTS: Agent[] = [
   {
-    id: "openclaw.default",
-    name: "OpenClaw",
-    description: "Default OpenClaw skill agent.",
+    id: 'openclaw.default',
+    name: 'OpenClaw',
+    description: 'Default OpenClaw skill agent.',
   },
   {
-    id: "hermes",
-    name: "Hermes",
-    description: "Hermes Agent (Nous Research) via OpenClaw routing.",
+    id: 'hermes',
+    name: 'Hermes',
+    description: 'Hermes Agent (Nous Research) via OpenClaw routing.',
   },
 ];
 
@@ -65,7 +65,7 @@ function sixDigitCode(): string {
   // Deterministic-enough for the mock; we just need a 6-digit string.
   return Math.floor(Math.random() * 1_000_000)
     .toString()
-    .padStart(6, "0");
+    .padStart(6, '0');
 }
 
 interface PendingPairing {
@@ -107,7 +107,7 @@ export class InMemoryMockGateway implements GatewayClient {
     const now = Date.now();
     for (const agent of this.agents) {
       const thread: Thread = {
-        id: uid("thread"),
+        id: uid('thread'),
         title: `Conversation with ${agent.name}`,
         agentId: agent.id,
         updatedAt: now,
@@ -122,7 +122,7 @@ export class InMemoryMockGateway implements GatewayClient {
   async requestPairing(_input: PairingRequest): Promise<PairingHandshake> {
     if (this.pending) {
       // Cancel any previous outstanding request before starting a new one.
-      this.pending.reject(new Error("Superseded by new pairing request"));
+      this.pending.reject(new Error('Superseded by new pairing request'));
       this.pending = null;
     }
     const code = sixDigitCode();
@@ -143,9 +143,7 @@ export class InMemoryMockGateway implements GatewayClient {
 
   awaitPaired(): Promise<{ token: Token; approved: PairingApproved }> {
     if (!this.pending) {
-      return Promise.reject(
-        new Error("awaitPaired() called before requestPairing()"),
-      );
+      return Promise.reject(new Error('awaitPaired() called before requestPairing()'));
     }
     return new Promise((resolve, reject) => {
       // Pending is guaranteed non-null by the guard above; re-pin into a local
@@ -165,19 +163,19 @@ export class InMemoryMockGateway implements GatewayClient {
    */
   _approvePairing(code: string): PairingApproved {
     if (!this.pending) {
-      throw new Error("No pending pairing request");
+      throw new Error('No pending pairing request');
     }
     if (this.pending.code !== code) {
       throw new Error(`Pairing code mismatch: expected ${this.pending.code}`);
     }
     const token: Token = {
-      value: uid("tok"),
+      value: uid('tok'),
       expiresAt: Date.now() + this.tokenTtlMs,
     };
     const approved: PairingApproved = {
       code,
       token,
-      runtimeUrl: "http://127.0.0.1:18789/copilot/runtime",
+      runtimeUrl: 'http://127.0.0.1:18789/copilot/runtime',
     };
     const p = this.pending;
     this.pending = null;
@@ -189,33 +187,26 @@ export class InMemoryMockGateway implements GatewayClient {
 
   async connect(token: string): Promise<void> {
     if (!token) {
-      throw new Error("connect() requires a non-empty token");
+      throw new Error('connect() requires a non-empty token');
     }
     this.currentToken = { value: token, expiresAt: Date.now() + this.tokenTtlMs };
     this.connected = true;
-    this.emit("connected", { gatewayId: "mock-gateway" });
+    this.emit('connected', { gatewayId: 'mock-gateway' });
   }
 
   on<E extends GatewayEvent>(
     event: E,
     handler: (payload: GatewayEventPayload[E]) => void,
   ): Unsubscribe {
-    const set = this.eventListeners[event] as Set<
-      (payload: GatewayEventPayload[E]) => void
-    >;
+    const set = this.eventListeners[event] as Set<(payload: GatewayEventPayload[E]) => void>;
     set.add(handler);
     return () => {
       set.delete(handler);
     };
   }
 
-  private emit<E extends GatewayEvent>(
-    event: E,
-    payload: GatewayEventPayload[E],
-  ): void {
-    const set = this.eventListeners[event] as Set<
-      (payload: GatewayEventPayload[E]) => void
-    >;
+  private emit<E extends GatewayEvent>(event: E, payload: GatewayEventPayload[E]): void {
+    const set = this.eventListeners[event] as Set<(payload: GatewayEventPayload[E]) => void>;
     for (const handler of set) {
       handler(payload);
     }
@@ -257,44 +248,44 @@ export class InMemoryMockGateway implements GatewayClient {
     }
 
     const userMessage: Message = {
-      id: uid("msg"),
+      id: uid('msg'),
       threadId,
-      role: "user",
+      role: 'user',
       content: input.content,
       createdAt: Date.now(),
     };
     messages.push(userMessage);
-    this.broadcastThreadEvent(threadId, { type: "message", message: userMessage });
+    this.broadcastThreadEvent(threadId, { type: 'message', message: userMessage });
 
     // Schedule a fake assistant reply. We don't await it from `postMessage` so
     // the caller sees the same semantics as a real WS: the reply arrives via
     // the stream subscription, not as a return value.
-    const assistantId = uid("msg");
+    const assistantId = uid('msg');
     const fire = () => {
       const assistantMessage: Message = {
         id: assistantId,
         threadId,
-        role: "assistant",
+        role: 'assistant',
         content: `Echo: ${input.content}`,
         createdAt: Date.now(),
       };
       messages.push(assistantMessage);
       this.broadcastThreadEvent(threadId, {
-        type: "message",
+        type: 'message',
         message: assistantMessage,
       });
       this.broadcastThreadEvent(threadId, {
-        type: "token",
+        type: 'token',
         messageId: assistantId,
         delta: assistantMessage.content,
       });
       this.broadcastThreadEvent(threadId, {
-        type: "tool_call",
+        type: 'tool_call',
         messageId: assistantId,
-        toolName: "echo.lookup",
+        toolName: 'echo.lookup',
         args: { input: input.content },
       });
-      this.broadcastThreadEvent(threadId, { type: "done", messageId: assistantId });
+      this.broadcastThreadEvent(threadId, { type: 'done', messageId: assistantId });
     };
 
     if (this.replyDelayMs <= 0) {
@@ -307,10 +298,7 @@ export class InMemoryMockGateway implements GatewayClient {
     }
   }
 
-  streamThread(
-    threadId: string,
-    onEvent: (e: ThreadEvent) => void,
-  ): Unsubscribe {
+  streamThread(threadId: string, onEvent: (e: ThreadEvent) => void): Unsubscribe {
     let set = this.threadListeners.get(threadId);
     if (!set) {
       set = new Set();
@@ -339,17 +327,14 @@ export class InMemoryMockGateway implements GatewayClient {
     const surface: CanvasSurface = {
       id: surfaceId,
       title: `Mock surface ${surfaceId}`,
-      content: { kind: "empty" },
+      content: { kind: 'empty' },
       updatedAt: Date.now(),
     };
     this.canvasById.set(surfaceId, surface);
     return surface;
   }
 
-  onCanvasUpdate(
-    surfaceId: string,
-    handler: (patch: CanvasPatch) => void,
-  ): Unsubscribe {
+  onCanvasUpdate(surfaceId: string, handler: (patch: CanvasPatch) => void): Unsubscribe {
     let set = this.canvasListeners.get(surfaceId);
     if (!set) {
       set = new Set();
@@ -374,7 +359,7 @@ export class InMemoryMockGateway implements GatewayClient {
 
   async openVoice(opts: VoiceOpts): Promise<VoiceSession> {
     this.assertConnected();
-    const id = uid("voice");
+    const id = uid('voice');
     return {
       id,
       mode: opts.mode,
@@ -388,7 +373,7 @@ export class InMemoryMockGateway implements GatewayClient {
 
   private assertConnected(): void {
     if (!this.connected || !this.currentToken) {
-      throw new Error("GatewayClient.connect() must succeed before this call");
+      throw new Error('GatewayClient.connect() must succeed before this call');
     }
   }
 }

@@ -13,7 +13,7 @@
 // transport plans (P04A / P04B) — see the constraints in
 // `.chalk/plans/P01A-protocol-package.md`.
 
-import { z, type ZodType } from "zod";
+import { z, type ZodType } from 'zod';
 
 /** Frame envelope wrapping every WS payload. */
 export interface Envelope<T> {

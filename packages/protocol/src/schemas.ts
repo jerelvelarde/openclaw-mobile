@@ -7,7 +7,7 @@
 // can import either the plain interface from `types.ts` or the inferred
 // alias from here; both resolve to the same shape.
 
-import { z } from "zod";
+import { z } from 'zod';
 
 export const TokenSchema = z.object({
   value: z.string().min(1),
@@ -42,7 +42,7 @@ export const ThreadSchema = z.object({
 });
 export type Thread = z.infer<typeof ThreadSchema>;
 
-export const MessageRoleSchema = z.enum(["user", "assistant", "system", "tool"]);
+export const MessageRoleSchema = z.enum(['user', 'assistant', 'system', 'tool']);
 export type MessageRole = z.infer<typeof MessageRoleSchema>;
 
 export const MessageSchema = z.object({
@@ -59,24 +59,24 @@ export const MessageInputSchema = z.object({
 });
 export type MessageInput = z.infer<typeof MessageInputSchema>;
 
-export const ThreadEventSchema = z.discriminatedUnion("type", [
+export const ThreadEventSchema = z.discriminatedUnion('type', [
   z.object({
-    type: z.literal("message"),
+    type: z.literal('message'),
     message: MessageSchema,
   }),
   z.object({
-    type: z.literal("token"),
+    type: z.literal('token'),
     messageId: z.string().min(1),
     delta: z.string(),
   }),
   z.object({
-    type: z.literal("tool_call"),
+    type: z.literal('tool_call'),
     messageId: z.string().min(1),
     toolName: z.string().min(1),
     args: z.record(z.string(), z.unknown()),
   }),
   z.object({
-    type: z.literal("done"),
+    type: z.literal('done'),
     messageId: z.string().min(1),
   }),
 ]);
@@ -98,7 +98,7 @@ export const CanvasPatchSchema = z.object({
 export type CanvasPatch = z.infer<typeof CanvasPatchSchema>;
 
 export const VoiceOptsSchema = z.object({
-  mode: z.enum(["ptt", "continuous"]),
+  mode: z.enum(['ptt', 'continuous']),
   sampleRate: z.number().int().positive(),
 });
 export type VoiceOpts = z.infer<typeof VoiceOptsSchema>;
