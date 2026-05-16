@@ -7,7 +7,7 @@
 // `triggerOpen`/`triggerMessage` API. The pairing flow is exercised in
 // `http.test.ts` already.
 
-import type { Agent, ThreadEvent } from '@openclaw/protocol';
+import type { Agent, CanvasPatch, CanvasSurface, ThreadEvent } from '@openclaw/protocol';
 
 import { PLACEHOLDER_PUBLIC_KEY, RealGateway } from '../RealGateway';
 import { WS_OPEN, type WebSocketFactory, type WebSocketLike } from '../ws';
@@ -279,5 +279,95 @@ describe('RealGateway WS topics', () => {
       webSocketFactory: factory,
     });
     await expect(unconnected.listAgents()).rejects.toThrow(/not connected/);
+  });
+
+  it('fans out canvas.surface broadcasts to onCanvasSurface subscribers', () => {
+    const received: CanvasSurface[] = [];
+    const unsub = gw.onCanvasSurface((s) => received.push(s));
+    const surface: CanvasSurface = {
+      id: 'surface_xyz',
+      version: 1,
+      root: { type: 'stack', id: 'r', direction: 'vertical', children: [] },
+    };
+    sockets[0]!.triggerMessage(
+      JSON.stringify({
+        id: 'c1',
+        topic: 'canvas',
+        type: 'canvas.surface',
+        payload: surface,
+        ts: Date.now(),
+      }),
+    );
+    expect(received).toEqual([surface]);
+    unsub();
+  });
+
+  it('getCanvas resolves from cache after a canvas.surface broadcast', async () => {
+    const surface: CanvasSurface = {
+      id: 'surface_cache',
+      version: 1,
+      root: { type: 'stack', id: 'r', direction: 'vertical', children: [] },
+    };
+    sockets[0]!.triggerMessage(
+      JSON.stringify({
+        id: 'c2',
+        topic: 'canvas',
+        type: 'canvas.surface',
+        payload: surface,
+        ts: Date.now(),
+      }),
+    );
+    await expect(gw.getCanvas('surface_cache')).resolves.toEqual(surface);
+  });
+
+  it('onCanvasUpdate routes canvas.patch frames to the matching surface', () => {
+    const patches: CanvasPatch[] = [];
+    const unsub = gw.onCanvasUpdate('surface_p', (p) => patches.push(p));
+    const patch: CanvasPatch = {
+      surfaceId: 'surface_p',
+      ts: 1,
+      ops: [{ op: 'setText', id: 'h', text: 'Hi' }],
+    };
+    sockets[0]!.triggerMessage(
+      JSON.stringify({
+        id: 'p1',
+        topic: 'canvas',
+        type: 'canvas.patch',
+        payload: patch,
+        ts: 1,
+      }),
+    );
+    // A patch for a different surface must be filtered out.
+    sockets[0]!.triggerMessage(
+      JSON.stringify({
+        id: 'p2',
+        topic: 'canvas',
+        type: 'canvas.patch',
+        payload: { ...patch, surfaceId: 'surface_other' },
+        ts: 2,
+      }),
+    );
+    expect(patches).toEqual([patch]);
+    unsub();
+  });
+
+  it('postCanvasEvent sends a canvas.event frame fire-and-forget', async () => {
+    await gw.postCanvasEvent({
+      surfaceId: 'surface_e',
+      nodeId: 'btn1',
+      type: 'click',
+      payload: { action: 'submit' },
+    });
+    const sent = sockets[0]!.sent.filter((s) => s.includes('canvas.event'));
+    expect(sent).toHaveLength(1);
+    const frame = JSON.parse(sent[0]!);
+    expect(frame.topic).toBe('canvas');
+    expect(frame.type).toBe('canvas.event');
+    expect(frame.payload).toEqual({
+      surfaceId: 'surface_e',
+      nodeId: 'btn1',
+      type: 'click',
+      payload: { action: 'submit' },
+    });
   });
 });

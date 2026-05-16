@@ -24,7 +24,7 @@
 // (rendered as a transient bubble below the closed history).
 
 import { useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -36,10 +36,14 @@ import {
   View,
 } from 'react-native';
 
+import type { CanvasSurface } from '@openclaw/protocol';
+
+import { CanvasRenderer } from '../../../src/canvas/CanvasRenderer';
 import { useOpenThreadAction, useSwitchAgentAction } from '../../../src/copilot/actions';
 import { useOptionalCopilotKit } from '../../../src/copilot/CopilotKitProvider';
 import { useStandardReadables } from '../../../src/copilot/readables';
 import { useChatRun, type ChatTurn } from '../../../src/copilot/useChatRun';
+import { RealGateway } from '../../../src/openclaw/gateway';
 import { usePairing } from '../../../src/pairing/PairingProvider';
 import { colors, fontSize, radius, spacing } from '../../../src/theme';
 
@@ -92,6 +96,28 @@ function ThreadDetailInner({
 
   const { messages, streaming, isRunning, error, send } = useChatRun(threadId);
 
+  // Subscribe to canvas surfaces emitted by the gateway. The desktop's
+  // stub publishes `canvas.surface` frames out-of-band from the AG-UI SSE
+  // stream — `RealGateway.onCanvasSurface` fans them out. We append each
+  // received surface id to a local list and the FlatList renders an inline
+  // `<CanvasRenderer>` for each one between message bubbles. Only available
+  // on `RealGateway`; the mock-gateway path simply never observes any
+  // surfaces (no protocol-level extension required).
+  const [canvasItems, setCanvasItems] = useState<CanvasSurface[]>([]);
+  useEffect(() => {
+    if (!(gateway instanceof RealGateway)) return;
+    const unsub = gateway.onCanvasSurface((surface) => {
+      setCanvasItems((prev) => {
+        // Dedupe by id — a re-emission shouldn't double-mount the renderer.
+        if (prev.some((s) => s.id === surface.id)) return prev;
+        return [...prev, surface];
+      });
+    });
+    return () => {
+      unsub();
+    };
+  }, [gateway]);
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -108,9 +134,15 @@ function ThreadDetailInner({
       <FlatList
         style={styles.list}
         contentContainerStyle={styles.listContent}
-        data={messages}
-        keyExtractor={(turn) => turn.id}
-        renderItem={({ item }) => <Bubble turn={item} />}
+        data={mergeChatItems(messages, canvasItems)}
+        keyExtractor={(item) => `${item.kind}:${item.id}`}
+        renderItem={({ item }) =>
+          item.kind === 'turn' ? (
+            <Bubble turn={item.turn} />
+          ) : (
+            <CanvasInline surface={item.surface} />
+          )
+        }
         ListFooterComponent={
           <>
             {streaming ? <Bubble turn={streaming} streaming /> : null}
@@ -137,6 +169,41 @@ function ThreadDetailInner({
         }}
       />
     </KeyboardAvoidingView>
+  );
+}
+
+// ── Chat list items ─────────────────────────────────────────────────────
+
+/**
+ * A combined chat item — either a finished `ChatTurn` or a Canvas surface
+ * received via the gateway. We can't widen `ThreadEvent` to carry canvas
+ * (P06.0 deliberately kept the schema small), so the chat surface joins the
+ * two streams locally and emits a union to its FlatList renderer.
+ */
+type CombinedItem =
+  | { kind: 'turn'; id: string; turn: ChatTurn }
+  | { kind: 'canvas'; id: string; surface: CanvasSurface };
+
+/**
+ * Append canvases to the chat list. Canvases land after the messages they
+ * were prompted by — a strict ordering by `surfaceId` would require a clock,
+ * and the agent loop is fast enough in practice that the user's last
+ * message is always the one that minted the surface.
+ */
+function mergeChatItems(turns: ChatTurn[], canvases: CanvasSurface[]): CombinedItem[] {
+  const items: CombinedItem[] = turns.map((turn) => ({ kind: 'turn', id: turn.id, turn }));
+  for (const surface of canvases) {
+    items.push({ kind: 'canvas', id: surface.id, surface });
+  }
+  return items;
+}
+
+/** Inline-in-chat Canvas card. The renderer drives its own gateway round-trip. */
+function CanvasInline({ surface }: { surface: CanvasSurface }): React.ReactElement {
+  return (
+    <View style={styles.canvasCard} testID={`thread-canvas-${surface.id}`}>
+      <CanvasRenderer surfaceId={surface.id} />
+    </View>
   );
 }
 
@@ -350,4 +417,10 @@ const styles = StyleSheet.create({
   },
   composerSendDisabled: { opacity: 0.5 },
   composerSendLabel: { color: colors.bg, fontSize: fontSize.md, fontWeight: '600' },
+  canvasCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderColor: colors.muted,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
 });

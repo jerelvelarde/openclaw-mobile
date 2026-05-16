@@ -291,3 +291,12 @@ export function usePairing(): PairingContextValue {
   }
   return ctx;
 }
+
+/**
+ * Like `usePairing()` but returns `null` when no `<PairingProvider>` is
+ * mounted instead of throwing. Used by hooks that may be invoked from tests
+ * that supply their own gateway and don't need the pairing tree.
+ */
+export function useOptionalPairing(): PairingContextValue | null {
+  return useContext(PairingContext);
+}

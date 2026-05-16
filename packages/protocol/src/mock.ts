@@ -21,7 +21,12 @@ import type {
   VoiceOpts,
   VoiceSession,
 } from './types';
-import { CANVAS_SCHEMA_VERSION, type CanvasPatch, type CanvasSurface } from './canvas';
+import {
+  CANVAS_SCHEMA_VERSION,
+  type CanvasEvent,
+  type CanvasPatch,
+  type CanvasSurface,
+} from './canvas';
 import type {
   GatewayClient,
   GatewayEvent,
@@ -363,6 +368,23 @@ export class InMemoryMockGateway implements GatewayClient {
     for (const handler of set) {
       handler(patch);
     }
+  }
+
+  /**
+   * Posted canvas events captured for assertion in tests. The mock has no
+   * agent loop to feed events into, so it just records them; production
+   * gateways forward to the agent over the WS.
+   */
+  private postedCanvasEvents: CanvasEvent[] = [];
+
+  async postCanvasEvent(event: CanvasEvent): Promise<void> {
+    this.assertConnected();
+    this.postedCanvasEvents.push(event);
+  }
+
+  /** Test helper: read every canvas event captured so far. */
+  _getPostedCanvasEvents(): readonly CanvasEvent[] {
+    return [...this.postedCanvasEvents];
   }
 
   // ── Voice ─────────────────────────────────────────────────────────────────

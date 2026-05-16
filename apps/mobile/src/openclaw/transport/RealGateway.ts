@@ -29,6 +29,7 @@
 
 import type {
   Agent,
+  CanvasEvent,
   CanvasPatch,
   CanvasSurface,
   Envelope,
@@ -154,6 +155,28 @@ export class RealGateway implements GatewayClient {
   private messageThreadOrder: string[] = [];
   /** Soft cap so the map can't grow without bound. */
   private readonly MESSAGE_MAP_LIMIT = 128;
+
+  /**
+   * Per-surface patch subscribers. The desktop emits `canvas.patch` frames
+   * carrying a `CanvasPatch`; we fan out to whichever screens registered
+   * via `onCanvasUpdate(surfaceId, …)`.
+   */
+  private canvasPatchSubscribers = new Map<string, Set<(p: CanvasPatch) => void>>();
+
+  /**
+   * Listeners that want every `canvas.surface` frame as it arrives, with no
+   * subscription filter — the chat screen uses this to detect new surfaces
+   * mid-conversation. Not part of `GatewayClient`; consumers narrow to
+   * `RealGateway` to subscribe.
+   */
+  private canvasSurfaceListeners = new Set<(surface: CanvasSurface) => void>();
+
+  /**
+   * Last-known snapshot per surface. Updated on every `canvas.surface`
+   * inbound frame. `getCanvas(id)` uses this as a synchronous cache so
+   * screens that load via a notified surface don't need a round-trip.
+   */
+  private canvasSnapshotCache = new Map<string, CanvasSurface>();
 
   constructor(opts: RealGatewayOptions) {
     this.httpBase = resolveHttpBase(opts.httpBase);
@@ -359,8 +382,48 @@ export class RealGateway implements GatewayClient {
       this.fanOutThreadEvent(frame);
       return;
     }
-    // 3. System pong — `ws.ts` schedules the next heartbeat on
+    // 3. Canvas surface / patch broadcasts. We route both off the frame
+    // `type` because the desktop stub publishes them under topic `''`
+    // when `ctx.reply(type, …)` is used without an explicit topic.
+    if (frame.type === 'canvas.surface') {
+      this.fanOutCanvasSurface(frame);
+      return;
+    }
+    if (frame.type === 'canvas.patch') {
+      this.fanOutCanvasPatch(frame);
+      return;
+    }
+    // 4. System pong — `ws.ts` schedules the next heartbeat on
     // `onmessage` already, no extra action needed here.
+  }
+
+  /** Cache a `canvas.surface` snapshot and notify every surface-listener. */
+  private fanOutCanvasSurface(frame: Envelope<unknown>): void {
+    const payload = frame.payload as CanvasSurface | undefined;
+    if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string') return;
+    this.canvasSnapshotCache.set(payload.id, payload);
+    for (const handler of [...this.canvasSurfaceListeners]) {
+      try {
+        handler(payload);
+      } catch (err) {
+        this.emit('error', { error: err instanceof Error ? err : new Error(String(err)) });
+      }
+    }
+  }
+
+  /** Fan out a `canvas.patch` frame to subscribers of its surface id. */
+  private fanOutCanvasPatch(frame: Envelope<unknown>): void {
+    const payload = frame.payload as CanvasPatch | undefined;
+    if (!payload || typeof payload !== 'object' || typeof payload.surfaceId !== 'string') return;
+    const subs = this.canvasPatchSubscribers.get(payload.surfaceId);
+    if (!subs) return;
+    for (const handler of [...subs]) {
+      try {
+        handler(payload);
+      } catch (err) {
+        this.emit('error', { error: err instanceof Error ? err : new Error(String(err)) });
+      }
+    }
   }
 
   /**
@@ -514,14 +577,77 @@ export class RealGateway implements GatewayClient {
 
   // ── Canvas (P06) ──────────────────────────────────────────────────────────
 
-  async getCanvas(_surfaceId: string): Promise<CanvasSurface> {
-    throw new Error('getCanvas() requires the Canvas schema (P06)');
+  /**
+   * Resolve the current snapshot for `surfaceId`. Looks first in the local
+   * cache populated by `canvas.surface` broadcasts (most surfaces arrive
+   * push-first), then falls back to a `canvas.get` request/response over
+   * the WS. The desktop stub gateway today only emits `canvas.surface`
+   * broadcasts — callers reaching this path will time out and the caller
+   * receives a typed error. Open question #30 tracks the missing topic.
+   */
+  async getCanvas(surfaceId: string): Promise<CanvasSurface> {
+    const cached = this.canvasSnapshotCache.get(surfaceId);
+    if (cached) return cached;
+    if (!this.socket || !this.socket.isOpen()) {
+      throw new Error('Gateway not connected');
+    }
+    const frame = this.buildFrame('canvas', 'canvas.get', { surfaceId });
+    try {
+      const res = await this.sendAndWait(frame, 5_000);
+      const body = (res.payload ?? {}) as { surface?: CanvasSurface };
+      if (!body.surface) {
+        throw new Error(`Gateway response missing surface for ${surfaceId}`);
+      }
+      this.canvasSnapshotCache.set(body.surface.id, body.surface);
+      return body.surface;
+    } catch (err) {
+      // The stub gateway doesn't yet expose `canvas.get` (open question
+      // #30). Surface a helpful error rather than letting the timeout
+      // bubble up unattributed.
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Canvas surface ${surfaceId} unavailable: ${detail}`);
+    }
   }
 
-  onCanvasUpdate(_surfaceId: string, _handler: (patch: CanvasPatch) => void): Unsubscribe {
+  onCanvasUpdate(surfaceId: string, handler: (patch: CanvasPatch) => void): Unsubscribe {
+    let subs = this.canvasPatchSubscribers.get(surfaceId);
+    if (!subs) {
+      subs = new Set();
+      this.canvasPatchSubscribers.set(surfaceId, subs);
+    }
+    subs.add(handler);
     return () => {
-      /* no-op */
+      const set = this.canvasPatchSubscribers.get(surfaceId);
+      if (!set) return;
+      set.delete(handler);
+      if (set.size === 0) this.canvasPatchSubscribers.delete(surfaceId);
     };
+  }
+
+  /**
+   * Subscribe to every `canvas.surface` frame as it arrives. Used by the
+   * chat screen to detect new surfaces mid-conversation. Not part of
+   * `GatewayClient` — consumers narrow to `RealGateway` to subscribe.
+   */
+  onCanvasSurface(handler: (surface: CanvasSurface) => void): Unsubscribe {
+    this.canvasSurfaceListeners.add(handler);
+    return () => {
+      this.canvasSurfaceListeners.delete(handler);
+    };
+  }
+
+  /**
+   * POST a `CanvasEvent` back to the agent over the WS. Fire-and-forget
+   * per the `GatewayClient` contract — transport errors bubble through
+   * the connection-level `error` event, not this promise. We resolve
+   * synchronously after queuing the frame.
+   */
+  async postCanvasEvent(event: CanvasEvent): Promise<void> {
+    if (!this.socket || !this.socket.isOpen()) {
+      throw new Error('Gateway not connected');
+    }
+    const frame = this.buildFrame('canvas', 'canvas.event', event);
+    this.socket.send(encode(frame));
   }
 
   // ── Voice (P07) ───────────────────────────────────────────────────────────
