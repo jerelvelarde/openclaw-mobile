@@ -25,8 +25,16 @@
 // `threads.post` would duplicate messages.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Agent, Message, ThreadEvent } from '@openclaw/protocol';
+import type {
+  Agent,
+  CanvasEvent,
+  CanvasPatch,
+  CanvasSurface,
+  Message,
+  ThreadEvent,
+} from '@openclaw/protocol';
 import { encode } from '@openclaw/protocol';
+import type { CanvasGateway } from '../canvas/CanvasGatewayContext';
 
 /** One tool-call surfaced inline below an assistant message. */
 export interface ToolCallView {
@@ -43,6 +51,12 @@ export interface ChatMessage extends Message {
   toolCalls?: ToolCallView[];
   /** True while the gateway is still streaming `token` events into `content`. */
   streaming?: boolean;
+  /**
+   * When set, this message is a Canvas placeholder — the bubble renders
+   * a `<CanvasRenderer surfaceId={…}/>` inline instead of `content`.
+   * The id matches a surface the gateway has cached.
+   */
+  surfaceId?: string;
 }
 
 /** Connection-state enum surfaced to the UI for the status pill. */
@@ -95,6 +109,8 @@ export interface GatewayHandle {
   postMessage: (content: string) => void;
   /** Force-disconnect (tests). */
   disconnect: () => void;
+  /** Canvas-shaped subset of the gateway, suitable for `CanvasGatewayProvider`. */
+  canvas: CanvasGateway;
 }
 
 interface AgentsListResponse {
@@ -181,6 +197,28 @@ export function useGateway(opts: UseGatewayOptions = {}): GatewayHandle {
   // which message to append to. Map: messageId → array index.
   const messageIndexRef = useRef<Map<string, number>>(new Map());
 
+  // Canvas plumbing -------------------------------------------------------
+  // The gateway maintains a small surface cache + a pub-sub for the
+  // canvas renderer. Keeping these in refs (vs. component state) means
+  // node components that mount mid-stream see the freshest data without
+  // forcing a parent re-render every patch. The canvas renderer itself
+  // owns surface state inside `useCanvas`.
+
+  const canvasCacheRef = useRef<Map<string, CanvasSurface>>(new Map());
+  const canvasSurfaceListenersRef = useRef<Map<string, Set<(s: CanvasSurface) => void>>>(new Map());
+  const canvasPatchListenersRef = useRef<Map<string, Set<(p: CanvasPatch) => void>>>(new Map());
+  /** Pending `canvas.get` requests keyed by frame id. */
+  const canvasGetPendingRef = useRef<
+    Map<
+      string,
+      { surfaceId: string; resolve: (s: CanvasSurface) => void; reject: (err: Error) => void }
+    >
+  >(new Map());
+  /** Surface-keyed list of waiters created before a frame id was known. */
+  const canvasGetWaitersRef = useRef<
+    Map<string, Array<{ resolve: (s: CanvasSurface) => void; reject: (err: Error) => void }>>
+  >(new Map());
+
   // ---- Wire handlers ----------------------------------------------------
 
   const handleAgentsList = useCallback((payload: AgentsListResponse): void => {
@@ -251,6 +289,56 @@ export function useGateway(opts: UseGatewayOptions = {}): GatewayHandle {
     });
   }, []);
 
+  const handleCanvasSurface = useCallback(
+    (surface: CanvasSurface, frameId: string | null): void => {
+      canvasCacheRef.current.set(surface.id, surface);
+      // Fan out to surface listeners + resolve any in-flight `getCanvas`
+      // promises (matched first by frame id, then by surface id).
+      const surfaceListeners = canvasSurfaceListenersRef.current.get(surface.id);
+      if (surfaceListeners) {
+        for (const fn of surfaceListeners) fn(surface);
+      }
+      if (frameId) {
+        const pending = canvasGetPendingRef.current.get(frameId);
+        if (pending && pending.surfaceId === surface.id) {
+          canvasGetPendingRef.current.delete(frameId);
+          pending.resolve(surface);
+        }
+      }
+      const waiters = canvasGetWaitersRef.current.get(surface.id);
+      if (waiters && waiters.length > 0) {
+        canvasGetWaitersRef.current.delete(surface.id);
+        for (const w of waiters) w.resolve(surface);
+      }
+      // Track canvas surfaces inline in the message list so the chat
+      // surface can render them without a separate side channel.
+      setMessages((prev) => {
+        if (prev.some((m) => m.surfaceId === surface.id)) return prev;
+        const placeholder: ChatMessage = {
+          id: `canvas_${surface.id}`,
+          threadId: activeThread,
+          role: 'assistant',
+          content: '',
+          createdAt: Date.now(),
+          surfaceId: surface.id,
+        };
+        return [...prev, placeholder];
+      });
+    },
+    [activeThread],
+  );
+
+  const handleCanvasPatch = useCallback((patch: CanvasPatch): void => {
+    // Update the cache so any node mounting after the patch sees the
+    // current shape; let renderer subscribers apply the patch
+    // themselves (we don't import `applyPatch` here — keeping the
+    // gateway dumb means a bad patch doesn't poison the cache).
+    const patchListeners = canvasPatchListenersRef.current.get(patch.surfaceId);
+    if (patchListeners) {
+      for (const fn of patchListeners) fn(patch);
+    }
+  }, []);
+
   const handleFrame = useCallback(
     (raw: string): void => {
       let parsed: unknown;
@@ -261,8 +349,14 @@ export function useGateway(opts: UseGatewayOptions = {}): GatewayHandle {
         return;
       }
       if (!parsed || typeof parsed !== 'object') return;
-      const frame = parsed as { topic?: unknown; type?: unknown; payload?: unknown };
+      const frame = parsed as {
+        id?: unknown;
+        topic?: unknown;
+        type?: unknown;
+        payload?: unknown;
+      };
       const type = typeof frame.type === 'string' ? frame.type : '';
+      const frameId = typeof frame.id === 'string' ? frame.id : null;
       const payload = frame.payload;
       if (type === 'agents.list.response') {
         handleAgentsList((payload ?? {}) as AgentsListResponse);
@@ -271,9 +365,37 @@ export function useGateway(opts: UseGatewayOptions = {}): GatewayHandle {
       } else if (type === 'agents.setActive.response') {
         // Best-effort: the stub already returns { ok, agentId } — we
         // don't surface failures yet (set in optimistic state below).
+      } else if (type === 'canvas.surface') {
+        const surface = payload as CanvasSurface | null;
+        if (surface && typeof surface === 'object' && typeof surface.id === 'string') {
+          handleCanvasSurface(surface, frameId);
+        }
+      } else if (type === 'canvas.patch') {
+        const patch = payload as CanvasPatch | null;
+        if (
+          patch &&
+          typeof patch === 'object' &&
+          typeof patch.surfaceId === 'string' &&
+          Array.isArray(patch.ops)
+        ) {
+          handleCanvasPatch(patch);
+        }
+      } else if (type === 'canvas.get.error') {
+        // Reject the matching pending getCanvas (if any).
+        if (frameId) {
+          const pending = canvasGetPendingRef.current.get(frameId);
+          if (pending) {
+            canvasGetPendingRef.current.delete(frameId);
+            const reason =
+              payload && typeof payload === 'object' && 'reason' in (payload as object)
+                ? String((payload as { reason: unknown }).reason)
+                : 'canvas.get failed';
+            pending.reject(new Error(reason));
+          }
+        }
       }
     },
-    [handleAgentsList, handleThreadEvent],
+    [handleAgentsList, handleCanvasPatch, handleCanvasSurface, handleThreadEvent],
   );
 
   // ---- Connect ----------------------------------------------------------
@@ -467,6 +589,90 @@ export function useGateway(opts: UseGatewayOptions = {}): GatewayHandle {
     [send],
   );
 
+  // ---- Canvas public methods -------------------------------------------
+
+  const peekCanvas = useCallback(
+    (surfaceId: string): CanvasSurface | null => canvasCacheRef.current.get(surfaceId) ?? null,
+    [],
+  );
+
+  const getCanvas = useCallback(
+    (surfaceId: string): Promise<CanvasSurface> => {
+      const cached = canvasCacheRef.current.get(surfaceId);
+      if (cached) return Promise.resolve(cached);
+      return new Promise<CanvasSurface>((resolve, reject) => {
+        const frame = buildFrame('canvas.get', 'canvas.get', { surfaceId });
+        const ok = send(frame);
+        if (!ok) {
+          // Socket not open yet — stash the waiter; the next pushed
+          // surface for `surfaceId` will resolve it.
+          const waiters = canvasGetWaitersRef.current.get(surfaceId) ?? [];
+          waiters.push({ resolve, reject });
+          canvasGetWaitersRef.current.set(surfaceId, waiters);
+          return;
+        }
+        canvasGetPendingRef.current.set(frame.id, { surfaceId, resolve, reject });
+      });
+    },
+    [send],
+  );
+
+  const onCanvasSurface = useCallback(
+    (surfaceId: string, handler: (surface: CanvasSurface) => void): (() => void) => {
+      const map = canvasSurfaceListenersRef.current;
+      let set = map.get(surfaceId);
+      if (!set) {
+        set = new Set();
+        map.set(surfaceId, set);
+      }
+      set.add(handler);
+      return (): void => {
+        const s = map.get(surfaceId);
+        if (!s) return;
+        s.delete(handler);
+        if (s.size === 0) map.delete(surfaceId);
+      };
+    },
+    [],
+  );
+
+  const onCanvasUpdate = useCallback(
+    (surfaceId: string, handler: (patch: CanvasPatch) => void): (() => void) => {
+      const map = canvasPatchListenersRef.current;
+      let set = map.get(surfaceId);
+      if (!set) {
+        set = new Set();
+        map.set(surfaceId, set);
+      }
+      set.add(handler);
+      return (): void => {
+        const s = map.get(surfaceId);
+        if (!s) return;
+        s.delete(handler);
+        if (s.size === 0) map.delete(surfaceId);
+      };
+    },
+    [],
+  );
+
+  const dispatchCanvasEvent = useCallback(
+    (event: CanvasEvent): void => {
+      send(buildFrame(`canvas.${event.surfaceId}.event`, 'canvas.event', event));
+    },
+    [send],
+  );
+
+  const canvas = useMemo<CanvasGateway>(
+    () => ({
+      peekCanvas,
+      getCanvas,
+      onCanvasSurface,
+      onCanvasUpdate,
+      dispatchCanvasEvent,
+    }),
+    [peekCanvas, getCanvas, onCanvasSurface, onCanvasUpdate, dispatchCanvasEvent],
+  );
+
   const disconnect = useCallback((): void => {
     if (reconnectHandleRef.current) {
       clearTimeoutImpl(reconnectHandleRef.current);
@@ -498,6 +704,7 @@ export function useGateway(opts: UseGatewayOptions = {}): GatewayHandle {
       messages,
       postMessage,
       disconnect,
+      canvas,
     }),
     [
       status,
@@ -509,6 +716,7 @@ export function useGateway(opts: UseGatewayOptions = {}): GatewayHandle {
       messages,
       postMessage,
       disconnect,
+      canvas,
     ],
   );
 }

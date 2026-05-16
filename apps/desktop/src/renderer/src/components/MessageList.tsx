@@ -5,6 +5,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { ChatMessage } from '../hooks/useGateway';
+import { CanvasRenderer } from '../canvas/CanvasRenderer';
 import { ToolCallView } from './ToolCallView';
 
 interface MessageListProps {
@@ -13,6 +14,18 @@ interface MessageListProps {
 
 function MessageBubble({ message }: { message: ChatMessage }): JSX.Element {
   const isUser = message.role === 'user';
+  // Canvas placeholder messages render the renderer inline instead of
+  // a chat bubble. The wrapping <li> still carries the message-row
+  // styles so the conversation flow stays consistent.
+  if (message.surfaceId) {
+    return (
+      <li className="oc-message oc-message--assistant oc-message--canvas">
+        <div className="oc-canvas-wrap">
+          <CanvasRenderer surfaceId={message.surfaceId} />
+        </div>
+      </li>
+    );
+  }
   return (
     <li
       className={`oc-message oc-message--${message.role}`}
