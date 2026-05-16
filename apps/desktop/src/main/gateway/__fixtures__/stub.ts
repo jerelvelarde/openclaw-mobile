@@ -22,13 +22,13 @@ import type {
   VoiceTranscript,
 } from '@openclaw/protocol';
 import { CANVAS_SCHEMA_VERSION, voiceTopics } from '@openclaw/protocol';
-import type { Router } from '../transport/router';
+import type { Router } from '../../transport/router';
 import {
   VOICE_FRAME_REPLY_TYPE,
   VOICE_TRANSCRIPT_TYPE,
   type VoiceFrameWire,
-} from '../voice/agentBridge';
-import { parseVoiceTopic } from '../voice/router';
+} from '../../voice/agentBridge';
+import { parseVoiceTopic } from '../../voice/router';
 
 /** Fake agents — same ids as `InMemoryMockGateway`'s defaults. */
 const STUB_AGENTS: Agent[] = [

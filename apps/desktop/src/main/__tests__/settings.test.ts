@@ -45,4 +45,23 @@ describe('SettingsStore', () => {
     const store = new SettingsStore(tmp);
     expect(store.read().lan_enabled).toBe(DEFAULT_SETTINGS.lan_enabled);
   });
+
+  it('defaults gateway_mode to "stub" when missing', () => {
+    const store = new SettingsStore(tmp);
+    expect(store.read().gateway_mode).toBe('stub');
+  });
+
+  it('persists a gateway_mode update to "real"', () => {
+    const store = new SettingsStore(tmp);
+    const updated = store.update({ gateway_mode: 'real' });
+    expect(updated.gateway_mode).toBe('real');
+    expect(new SettingsStore(tmp).read().gateway_mode).toBe('real');
+  });
+
+  it('coerces unknown gateway_mode values back to the default', () => {
+    const path = join(tmp, 'settings.json');
+    writeFileSync(path, JSON.stringify({ version: 1, gateway_mode: 'turbo' }));
+    const store = new SettingsStore(tmp);
+    expect(store.read().gateway_mode).toBe(DEFAULT_SETTINGS.gateway_mode);
+  });
 });

@@ -168,6 +168,10 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
     - Our v1 UX (`apps/mobile/app/(pairing)/code.tsx` + `apps/desktop/src/main/pair/server.ts`) is a TOTP-style 6-digit code matched in the desktop UI. It's a better UX for the LAN-discovery scenario (you literally see the desktop next to the phone).
     - **Action:** keep our 6-digit flow as the **desktop-driven** path. The bridge generates a bootstrap token on the desktop side when the user clicks "Approve", then hands the token to the WS connect machinery — mobile UX is unchanged. Pitch our 6-digit code idiom as PR-back #3 (`openclaw-upstream.md` §13) so other front-ends can adopt it via `extensions/device-pair`. Resolves delta B1.
 
+41. **`unsupportedInRealMode` error surfacing in apps** `[mobile]` `[desktop]` — surfaced by P10A.
+    - The real-gateway bridge (`apps/desktop/src/main/gateway/openclaw-bridge.ts`) returns a typed `{ ok:false, reason:"unsupportedInRealMode", feature, detail }` payload on `canvas.error` / `voice.error` / `agents.setActive.response` when chat-only mode is active. The mobile + desktop chat UIs don't currently observe those response types — they subscribe to `canvas.surface` / `voice.transcript` / `voice.frame.reply` directly, so the bridge's error envelope drops on the floor (visible in dev tools network panel, but invisible to the end user).
+    - **Action:** decide whether to land a thin "feature unsupported" banner in mobile (`apps/mobile/src/...`) and the desktop renderer that subscribes to `canvas.error` / `voice.error` and surfaces a Snackbar/Toast. Out of scope for P10A (chat-only happy path). Tracked here so P10C's e2e plan picks it up before we cut a real-mode build for real users.
+
 ---
 
 ## B. Decisions we can make as we go
