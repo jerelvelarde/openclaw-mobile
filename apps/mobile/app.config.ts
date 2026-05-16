@@ -14,12 +14,26 @@
 // - `ios.infoPlist.NSBonjourServices` — explicit allow-list of service types
 //   we plan to browse / advertise. We only need `_openclaw._tcp` since we're
 //   never browsing for anything else.
+// - `ios.infoPlist.NSMicrophoneUsageDescription` — required by Apple for any
+//   app that records audio. Without it, the OS denies the permission silently
+//   and `react-native-webrtc` can't open the mic. P07A adds the friendly
+//   rationale string; the runtime permission prompt is fired by `permissions.ts`.
+// - `ios.infoPlist.UIBackgroundModes: ["audio"]` — keeps audio capture +
+//   playback alive while the screen locks during a voice turn (P07A). Full
+//   CallKit/PushKit interop is post-v1; this entitlement covers the common
+//   "phone goes to sleep mid-turn" case.
 // - `android.permissions` — `INTERNET` is implicit but listed for clarity;
 //   `ACCESS_WIFI_STATE` + `CHANGE_WIFI_MULTICAST_STATE` are what the
 //   `react-native-zeroconf` README calls out as required for multicast
 //   discovery on Android. The library acquires a multicast lock at runtime;
 //   without `CHANGE_WIFI_MULTICAST_STATE` the lock attempt is a no-op and
-//   discovery silently fails on Wi-Fi.
+//   discovery silently fails on Wi-Fi. P07A adds `RECORD_AUDIO` (mic), plus
+//   `MODIFY_AUDIO_SETTINGS` + `BLUETOOTH` so `react-native-webrtc` can route
+//   audio through the loudspeaker and Bluetooth headsets. Foreground service
+//   for an active voice call (so Android won't kill the mic when the screen
+//   sleeps) is a stub for v1 — we declare the `FOREGROUND_SERVICE` permission
+//   here and the runtime hook in `usePushToTalk.ts` is a no-op until a
+//   proper notification service ships post-v1.
 //
 // We keep all other settings identical to the prior `app.json` so the
 // switch is purely additive — `expo prebuild` will regenerate the native
@@ -46,6 +60,10 @@ const config: ExpoConfig = {
       NSLocalNetworkUsageDescription:
         'OpenClaw discovers your Mac on the local Wi-Fi network so you can pair without typing an address.',
       NSBonjourServices: ['_openclaw._tcp'],
+      // P07A — mic + background audio.
+      NSMicrophoneUsageDescription:
+        'OpenClaw uses your microphone to send voice to your agent on the Mac. Audio leaves your phone only while you hold the push-to-talk button.',
+      UIBackgroundModes: ['audio'],
     },
   },
   android: {
@@ -54,14 +72,26 @@ const config: ExpoConfig = {
     predictiveBackGestureEnabled: false,
     // `INTERNET` is implicit but listing it documents intent. The two Wi-Fi
     // entries are what react-native-zeroconf needs to acquire a multicast
-    // lock for mDNS browse on Wi-Fi.
-    permissions: ['INTERNET', 'ACCESS_WIFI_STATE', 'CHANGE_WIFI_MULTICAST_STATE'],
+    // lock for mDNS browse on Wi-Fi. `RECORD_AUDIO` + audio-routing + BT
+    // entries are required by `react-native-webrtc` for the mic capture and
+    // speaker/headset switching in P07A. `FOREGROUND_SERVICE` is declared
+    // ahead of the post-v1 active-call service (stub today).
+    permissions: [
+      'INTERNET',
+      'ACCESS_WIFI_STATE',
+      'CHANGE_WIFI_MULTICAST_STATE',
+      'RECORD_AUDIO',
+      'MODIFY_AUDIO_SETTINGS',
+      'BLUETOOTH',
+      'BLUETOOTH_ADMIN',
+      'FOREGROUND_SERVICE',
+    ],
   },
   web: {
     bundler: 'metro',
     output: 'static',
   },
-  plugins: ['expo-router'],
+  plugins: ['expo-router', '@config-plugins/react-native-webrtc'],
   experiments: {
     typedRoutes: true,
   },

@@ -49,14 +49,22 @@
     <array>
       <string>_openclaw._tcp</string>
     </array>
+    <key>NSCameraUsageDescription</key>
+    <string>Allow $(PRODUCT_NAME) to access your camera</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>OpenClaw discovers your Mac on the local Wi-Fi network so you can pair without typing an address.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpenClaw uses your microphone to send voice to your agent on the Mac. Audio leaves your phone only while you hold the push-to-talk button.</string>
     <key>NSUserActivityTypes</key>
     <array>
       <string>$(PRODUCT_BUNDLE_IDENTIFIER).expo.index_route</string>
     </array>
     <key>RCTNewArchEnabled</key>
     <true/>
+    <key>UIBackgroundModes</key>
+    <array>
+      <string>audio</string>
+    </array>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
     <key>UIRequiredDeviceCapabilities</key>
