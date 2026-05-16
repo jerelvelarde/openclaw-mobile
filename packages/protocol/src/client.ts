@@ -14,10 +14,9 @@ import type {
   Thread,
   ThreadEvent,
   Token,
-  VoiceOpts,
-  VoiceSession,
 } from './types';
 import type { CanvasEvent, CanvasPatch, CanvasSurface } from './canvas';
+import type { VoiceOpts, VoiceSession } from './voice';
 
 /** Removes a previously-registered listener. */
 export type Unsubscribe = () => void;

@@ -7,8 +7,9 @@
 // re-derives the same types via `z.infer<>`; we re-export the schemas as
 // values and let `types.ts` win for the type names.
 //
-// Canvas v1 lives in `./canvas/`; we re-export it here so callers see a
-// single import path (`@openclaw/protocol`) for every shared shape.
+// Canvas v1 lives in `./canvas/`; Voice v1 lives in `./voice/`. We re-export
+// both here so callers see a single import path (`@openclaw/protocol`) for
+// every shared shape.
 
 export type {
   Token,
@@ -20,8 +21,6 @@ export type {
   Message,
   MessageInput,
   ThreadEvent,
-  VoiceOpts,
-  VoiceSession,
 } from './types';
 
 export {
@@ -34,7 +33,6 @@ export {
   MessageSchema,
   MessageInputSchema,
   ThreadEventSchema,
-  VoiceOptsSchema,
 } from './schemas';
 
 export type { Envelope } from './envelope';
@@ -83,3 +81,23 @@ export {
   CanvasSurfaceSchema,
   applyPatch,
 } from './canvas';
+
+// ── Voice v1 (P07.0) ────────────────────────────────────────────────────────
+
+export {
+  VOICE_SCHEMA_VERSION,
+  voiceTopics,
+  type VoiceFormat,
+  type VoiceFrame,
+  type VoiceOpts,
+  type VoiceSession,
+  type VoiceSignal,
+  type VoiceSignalType,
+  type VoiceTranscript,
+  VoiceFormatSchema,
+  VoiceFrameSchema,
+  VoiceOptsSchema,
+  VoiceSignalSchema,
+  VoiceSignalTypeSchema,
+  VoiceTranscriptSchema,
+} from './voice';

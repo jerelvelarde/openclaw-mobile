@@ -18,8 +18,6 @@ import type {
   Thread,
   ThreadEvent,
   Token,
-  VoiceOpts,
-  VoiceSession,
 } from './types';
 import {
   CANVAS_SCHEMA_VERSION,
@@ -27,6 +25,7 @@ import {
   type CanvasPatch,
   type CanvasSurface,
 } from './canvas';
+import type { VoiceOpts, VoiceSession } from './voice';
 import type {
   GatewayClient,
   GatewayEvent,
@@ -394,7 +393,7 @@ export class InMemoryMockGateway implements GatewayClient {
     const id = uid('voice');
     return {
       id,
-      mode: opts.mode,
+      agentId: opts.agentId,
       close: async () => {
         /* no-op in mock */
       },
