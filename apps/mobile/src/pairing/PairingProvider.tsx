@@ -3,8 +3,11 @@
 // to read state and trigger transitions; nothing else in the app reaches into
 // the gateway directly during the pairing flow.
 //
-// For P03A the gateway is always the `InMemoryMockGateway`. P04A swaps in a
-// real WS-backed client at this seam without touching the screens.
+// P03A: the gateway was always `InMemoryMockGateway`.
+// P04A: when the discover screen picks a real host (Bonjour-resolved or
+// pasted), we instantiate a `RealGateway` for that host and the pairing
+// flow goes over actual HTTP + WS. The in-memory mock stays as the
+// fallback used by tests and the dev "Mock Mac mini" entry.
 
 import {
   createContext,
@@ -14,6 +17,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type Dispatch,
   type ReactElement,
   type ReactNode,
@@ -21,7 +25,12 @@ import {
 
 import type { PairingApproved, Token } from '@openclaw/protocol';
 
-import { InMemoryMockGateway, type GatewayClient } from '../openclaw/gateway';
+import {
+  InMemoryMockGateway,
+  RealGateway,
+  type GatewayClient,
+  type ReconnectState,
+} from '../openclaw/gateway';
 
 import { initialPairingState, pairingReducer, type PairingEvent, type PairingState } from './state';
 import { clearPairingToken, loadPairingToken, savePairingToken } from './store';
@@ -40,12 +49,23 @@ export interface PairingContextValue {
   error: string | undefined;
   /** The active gateway client. Exposed so `code.tsx` can call `_approvePairing`. */
   gateway: GatewayClient;
-  /** Convenience action used by `discover.tsx`. */
-  selectHost: (hostId: string, deviceName: string) => Promise<void>;
+  /**
+   * Convenience action used by `discover.tsx`. When `httpBase` is provided,
+   * we install a `RealGateway` for that host and the pairing flow uses
+   * real HTTP. When omitted, we use the existing in-memory mock — that
+   * path is what the `__tests__` and the optional "dev mock" entry use.
+   */
+  selectHost: (hostId: string, deviceName: string, httpBase?: string) => Promise<void>;
   /** Convenience action used by `code.tsx` after approval lands. */
   finalizePairing: (token: Token, approved: PairingApproved) => Promise<void>;
   /** Convenience action used by `settings.tsx` re-pair stub. */
   resetPairing: () => Promise<void>;
+  /**
+   * Current reconnect-controller state. Only meaningful once a `RealGateway`
+   * is active and `connect()` has fired; otherwise `null`. The global "Can't
+   * reach your Mac" banner subscribes via this field.
+   */
+  reconnect: ReconnectState | null;
 }
 
 const PairingContext = createContext<PairingContextValue | null>(null);
@@ -77,6 +97,9 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
   }
 
   const [state, dispatch] = useReducer(pairingReducer, initialPairingState);
+  // Reconnect state from the active `RealGateway` (or `null` when the mock
+  // is in use). Stored in React state so subscribers re-render on transitions.
+  const [reconnectState, setReconnectState] = useState<ReconnectState | null>(null);
 
   // On first mount, try to load a persisted token. If we find one, jump
   // straight to `paired` so the user lands in `(tabs)` without re-pairing.
@@ -104,32 +127,41 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
     };
   }, []);
 
-  const selectHost = useCallback(async (hostId: string, deviceName: string) => {
-    dispatch({ type: 'HOST_SELECTED', hostId });
-    try {
-      const handshake = await gatewayRef.current.requestPairing({ deviceName });
-      dispatch({
-        type: 'CODE_ISSUED',
-        code: handshake.code,
-        expiresAt: handshake.expiresAt,
-      });
-      // Start waiting for approval. The mock resolves this when
-      // `_approvePairing(code)` runs (dev-only button in `code.tsx`); the
-      // real desktop will resolve it when the user clicks "Approve". The
-      // dispatch happens in `finalizePairing` so the resolver path is the
-      // same for tests and real users.
-      const { token, approved } = await gatewayRef.current.awaitPaired();
-      // Note: the resolver also persists + dispatches APPROVED — but we still
-      // run finalizePairing here so the in-app dev button is not required for
-      // the eventual real flow.
-      await finalizeRef.current(token, approved);
-    } catch (err) {
-      dispatch({
-        type: 'FAILED',
-        error: err instanceof Error ? err.message : 'Pairing failed',
-      });
-    }
-  }, []);
+  const selectHost = useCallback(
+    async (hostId: string, deviceName: string, httpBase?: string) => {
+      dispatch({ type: 'HOST_SELECTED', hostId });
+      try {
+        // If the caller passed a real host base, swap in a `RealGateway`
+        // for the rest of the flow. The mock path is preserved for tests +
+        // the dev `Mock Mac mini` fallback.
+        if (httpBase && !(gateway && gateway === gatewayRef.current)) {
+          gatewayRef.current = new RealGateway({ httpBase, deviceName });
+        }
+        const handshake = await gatewayRef.current.requestPairing({ deviceName });
+        dispatch({
+          type: 'CODE_ISSUED',
+          code: handshake.code,
+          expiresAt: handshake.expiresAt,
+        });
+        // Start waiting for approval. The mock resolves this when
+        // `_approvePairing(code)` runs (dev-only button in `code.tsx`); the
+        // real desktop will resolve it when the user clicks "Approve". The
+        // dispatch happens in `finalizePairing` so the resolver path is the
+        // same for tests and real users.
+        const { token, approved } = await gatewayRef.current.awaitPaired();
+        // Note: the resolver also persists + dispatches APPROVED — but we still
+        // run finalizePairing here so the in-app dev button is not required for
+        // the eventual real flow.
+        await finalizeRef.current(token, approved);
+      } catch (err) {
+        dispatch({
+          type: 'FAILED',
+          error: err instanceof Error ? err.message : 'Pairing failed',
+        });
+      }
+    },
+    [gateway],
+  );
 
   const finalizePairing = useCallback(async (token: Token, approved: PairingApproved) => {
     try {
@@ -158,8 +190,30 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
       // Swallow store errors on clear — there's nothing the user can do
       // about a wiped Keychain entry that already isn't there.
     }
+    // Tear down any live socket from a `RealGateway` so the next pairing
+    // attempt doesn't trip on a stale reconnect loop.
+    if (gatewayRef.current instanceof RealGateway) {
+      gatewayRef.current.disconnect();
+    }
+    setReconnectState(null);
     dispatch({ type: 'RESET' });
   }, []);
+
+  // Subscribe to reconnect-state on the active gateway whenever it's a
+  // RealGateway and the user has reached `paired`. We don't `connect()`
+  // here yet — the WS handshake (and the persistent `httpBase` that has to
+  // come with it) is wired up by the screens once they have a host. For
+  // tests + the mock path this effect is a no-op.
+  useEffect(() => {
+    if (!(gatewayRef.current instanceof RealGateway)) {
+      setReconnectState(null);
+      return;
+    }
+    const unsub = gatewayRef.current.subscribeReconnect((s) => {
+      setReconnectState(s);
+    });
+    return unsub;
+  }, [state.status]);
 
   const value = useMemo<PairingContextValue>(
     () => ({
@@ -171,8 +225,9 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
       selectHost,
       finalizePairing,
       resetPairing,
+      reconnect: reconnectState,
     }),
-    [state, selectHost, finalizePairing, resetPairing],
+    [state, selectHost, finalizePairing, resetPairing, reconnectState],
   );
 
   return <PairingContext.Provider value={value}>{children}</PairingContext.Provider>;
