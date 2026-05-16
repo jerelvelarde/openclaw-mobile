@@ -9,10 +9,10 @@
 //
 // P04B opens this server to the LAN (when `settings.lan_enabled === true`)
 // so Bonjour-discovered phones can reach it, and attaches the WS
-// transport on the same port. The CopilotKit runtime adapter that
-// `runtime_url` will eventually point at lands in P05C; for now we
-// return a placeholder URL built from the LAN hostname so the mobile
-// client uses the right address after pairing.
+// transport on the same port. P05C mounts the CopilotKit runtime adapter
+// at `/copilot/runtime` on this same fastify instance, so the
+// `runtime_url` returned by `/pair/status` resolves to a live HTTP
+// endpoint mobile can POST against.
 //
 // The pending-pair table lives in-memory: pairing requests are transient
 // and don't survive a desktop restart on purpose (the user will just
@@ -28,11 +28,12 @@ import type { SigningKey } from './keypair';
 export const DEFAULT_PORT = 18789;
 
 /**
- * Build the `runtime_url` value returned at pairing time. P04B now
- * derives this from the LAN hostname so mobile can reach the runtime
- * after pairing; loopback callers (dev tooling, the renderer chat UI)
- * pass `host: '127.0.0.1'`. The actual `/copilot/runtime` adapter is
- * implemented by P05C — this URL is the stable contract mobile
+ * Build the `runtime_url` value returned at pairing time. P04B derives
+ * this from the LAN hostname so mobile can reach the runtime after
+ * pairing; loopback callers (dev tooling, the renderer chat UI) pass
+ * `host: '127.0.0.1'`. P05C mounts the actual `/copilot/runtime`
+ * adapter on the same fastify server (see `copilot/runtime.ts`'s
+ * `registerCopilotRuntime`) — this URL is the live endpoint mobile
  * stashes alongside the token.
  */
 export function buildRuntimeUrl(host: string, port: number): string {
