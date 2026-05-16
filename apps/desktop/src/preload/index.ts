@@ -10,7 +10,13 @@
 // `./ipc-channels.ts` so main + preload can share them.
 
 import { contextBridge, ipcRenderer } from 'electron';
-import { IPC, PairedDeviceView, PendingPairView, SettingsView } from './ipc-channels';
+import {
+  IPC,
+  PairedDeviceView,
+  PendingPairView,
+  SelfTokenView,
+  SettingsView,
+} from './ipc-channels';
 
 const api = {
   /** Returns "pong". Smoke-test handle for the IPC bridge. */
@@ -65,6 +71,19 @@ const api = {
     /** Return the current persisted settings. */
     get: async (): Promise<SettingsView> => {
       return (await ipcRenderer.invoke(IPC.SETTINGS_GET)) as SettingsView;
+    },
+  },
+
+  system: {
+    /**
+     * Return the self-issued bearer token + loopback URLs the renderer
+     * uses to talk to its own backend (P05B). The token is loopback-only
+     * — the preload bridge surfaces it via IPC only; never log it,
+     * never put it in a `?query` param that crosses out of the
+     * renderer.
+     */
+    getSelfToken: async (): Promise<SelfTokenView> => {
+      return (await ipcRenderer.invoke(IPC.SYSTEM_GET_SELF_TOKEN)) as SelfTokenView;
     },
   },
 } as const;

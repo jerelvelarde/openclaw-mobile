@@ -16,5 +16,10 @@ export default defineConfig({
       ['src/main/**', 'node'],
     ],
     globals: false,
+    // Auto-unmount renderer trees between tests so `getByRole` doesn't
+    // match leftover DOM from the previous `render()`. Scoped to
+    // renderer files via the path filter — main-process tests run in
+    // `node` and don't import React.
+    setupFiles: ['./src/renderer/test-setup.ts'],
   },
 });
