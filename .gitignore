@@ -42,6 +42,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Claude Code harness scratch (sub-agent worktrees, etc.)
+.claude/
+
 # iOS / Xcode
 ios/Pods/
 ios/build/
