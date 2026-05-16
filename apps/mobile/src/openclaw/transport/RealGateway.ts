@@ -46,8 +46,10 @@ import type {
   Unsubscribe,
   VoiceOpts,
   VoiceSession,
+  VoiceSignal,
+  VoiceTranscript,
 } from '@openclaw/protocol';
-import { encode } from '@openclaw/protocol';
+import { encode, voiceTopics } from '@openclaw/protocol';
 
 import { resolveHttpBase, startPairingFlow, type FetchLike } from './http';
 import { ReconnectController, type ReconnectListener, type ReconnectState } from './reconnect';
@@ -162,6 +164,23 @@ export class RealGateway implements GatewayClient {
    * via `onCanvasUpdate(surfaceId, …)`.
    */
   private canvasPatchSubscribers = new Map<string, Set<(p: CanvasPatch) => void>>();
+
+  /**
+   * Per-session voice signaling subscribers. The desktop relays `VoiceSignal`
+   * frames (offer/answer/ice) on `voice.<sessionId>.signal`; the mobile
+   * webrtc module (`src/voice/webrtc.ts`) subscribes via
+   * {@link onVoiceSignal} to drive the local `RTCPeerConnection`.
+   */
+  private voiceSignalSubscribers = new Map<string, Set<(s: VoiceSignal) => void>>();
+
+  /**
+   * Per-session voice transcript subscribers. The agent streams interim +
+   * final `VoiceTranscript` frames on `voice.<sessionId>.transcript`; the
+   * push-to-talk hook (`src/voice/usePushToTalk.ts`) merges them into a
+   * `TranscriptLog`. Multiple subscribers are supported (e.g. screen +
+   * debug HUD).
+   */
+  private voiceTranscriptSubscribers = new Map<string, Set<(t: VoiceTranscript) => void>>();
 
   /**
    * Listeners that want every `canvas.surface` frame as it arrives, with no
@@ -393,8 +412,68 @@ export class RealGateway implements GatewayClient {
       this.fanOutCanvasPatch(frame);
       return;
     }
-    // 4. System pong — `ws.ts` schedules the next heartbeat on
+    // 4. Voice frames — three sub-topics keyed by sessionId.
+    if (typeof frame.topic === 'string' && frame.topic.startsWith('voice.')) {
+      this.fanOutVoiceFrame(frame);
+      return;
+    }
+    // 5. System pong — `ws.ts` schedules the next heartbeat on
     // `onmessage` already, no extra action needed here.
+  }
+
+  /**
+   * Route a `voice.<sessionId>.signal` or `voice.<sessionId>.transcript`
+   * payload to the matching per-session subscriber set. We parse the
+   * sessionId from `topic` (format `voice.<id>.<subkind>`) and fan out by
+   * `<subkind>`. Voice frame fallback (`.frame`) is binary and is handled
+   * out of band in P07B; for v1 the client uses WebRTC for media.
+   */
+  private fanOutVoiceFrame(frame: Envelope<unknown>): void {
+    const parts = frame.topic.split('.');
+    // `voice.<sessionId>.<kind>` — exactly three parts. Future schema
+    // versions may add more; we ignore unknown shapes.
+    if (parts.length !== 3) return;
+    const [, sessionId, kind] = parts;
+    if (!sessionId || !kind) return;
+    if (kind === 'signal') {
+      const payload = frame.payload as VoiceSignal | undefined;
+      if (!payload || typeof payload !== 'object' || typeof payload.type !== 'string') return;
+      const subs = this.voiceSignalSubscribers.get(sessionId);
+      if (!subs) return;
+      for (const handler of [...subs]) {
+        try {
+          handler(payload);
+        } catch (err) {
+          this.emit('error', { error: err instanceof Error ? err : new Error(String(err)) });
+        }
+      }
+      return;
+    }
+    if (kind === 'transcript') {
+      const payload = frame.payload as VoiceTranscript | undefined;
+      if (
+        !payload ||
+        typeof payload !== 'object' ||
+        typeof payload.text !== 'string' ||
+        typeof payload.isFinal !== 'boolean' ||
+        typeof payload.ts !== 'number'
+      ) {
+        return;
+      }
+      const subs = this.voiceTranscriptSubscribers.get(sessionId);
+      if (!subs) return;
+      for (const handler of [...subs]) {
+        try {
+          handler(payload);
+        } catch (err) {
+          this.emit('error', { error: err instanceof Error ? err : new Error(String(err)) });
+        }
+      }
+      return;
+    }
+    // `frame` (binary WS-frames fallback) — P07B handles binary payloads
+    // out-of-band. The current JSON-only inbound path can't see those
+    // frames, so we drop unrecognised voice sub-kinds silently.
   }
 
   /** Cache a `canvas.surface` snapshot and notify every surface-listener. */
@@ -650,10 +729,119 @@ export class RealGateway implements GatewayClient {
     this.socket.send(encode(frame));
   }
 
-  // ── Voice (P07) ───────────────────────────────────────────────────────────
+  // ── Voice (P07A) ──────────────────────────────────────────────────────────
 
-  async openVoice(_opts: VoiceOpts): Promise<VoiceSession> {
-    throw new Error('openVoice() requires the voice transport (P07)');
+  /**
+   * Open a voice session. The mobile `voice.tsx` screen calls this once on
+   * mount; the returned `VoiceSession` carries the `sessionId` the screen
+   * then passes to `openVoicePeer()` for the WebRTC handshake. The actual
+   * audio doesn't flow through the gateway — it travels peer-to-peer on
+   * the WebRTC connection. The gateway's only job is to **relay
+   * signaling** (`voice.<id>.signal`) and **fan out transcripts**
+   * (`voice.<id>.transcript`) — both are wired below.
+   *
+   * For v1 we generate the session id client-side. P07B may later swap
+   * this for a desktop-issued id (so multiple clients on the same gateway
+   * don't collide) — at that point we'll add a `voice.open` request/response.
+   */
+  async openVoice(opts: VoiceOpts): Promise<VoiceSession> {
+    if (!this.socket || !this.socket.isOpen()) {
+      throw new Error('Gateway not connected');
+    }
+    // Session id: `vs_<timeBase36>_<rand>`. Same shape as our request ids
+    // so logs stay grep-friendly. The desktop relay doesn't parse this —
+    // it's opaque routing data threaded through topic names.
+    const sessionId = `vs_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    // Announce the session opening to the gateway so it can spawn the
+    // agent-side peer. Fire-and-forget — the response (`voice.open.response`)
+    // arrives back via the inbound router but we don't wait on it for v1,
+    // matching the `threads.post` pattern.
+    const openFrame = this.buildFrame('voice', 'voice.open', { sessionId, opts });
+    try {
+      this.socket.send(encode(openFrame));
+    } catch (err) {
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+    return {
+      id: sessionId,
+      agentId: opts.agentId,
+      close: async () => {
+        if (this.socket && this.socket.isOpen()) {
+          const closeFrame = this.buildFrame('voice', 'voice.close', { sessionId });
+          try {
+            this.socket.send(encode(closeFrame));
+          } catch {
+            /* fire-and-forget — teardown should never throw */
+          }
+        }
+        // Drop any subscribers so a re-open is fresh. The hooks already
+        // call their `unsub()` on unmount, but defensive cleanup here
+        // prevents stale subscribers when the screen is re-opened in the
+        // same JS context.
+        this.voiceSignalSubscribers.delete(sessionId);
+        this.voiceTranscriptSubscribers.delete(sessionId);
+      },
+    };
+  }
+
+  /**
+   * Subscribe to inbound `VoiceSignal` frames (offer/answer/ice) for a
+   * session. The mobile WebRTC module uses this to drive the local
+   * `RTCPeerConnection`. Returns a no-op unsubscribe if called for a
+   * topic that's never delivered any frames — that's fine; the
+   * subscriber set is freed lazily.
+   */
+  onVoiceSignal(sessionId: string, handler: (signal: VoiceSignal) => void): Unsubscribe {
+    let subs = this.voiceSignalSubscribers.get(sessionId);
+    if (!subs) {
+      subs = new Set();
+      this.voiceSignalSubscribers.set(sessionId, subs);
+    }
+    subs.add(handler);
+    return () => {
+      const set = this.voiceSignalSubscribers.get(sessionId);
+      if (!set) return;
+      set.delete(handler);
+      if (set.size === 0) this.voiceSignalSubscribers.delete(sessionId);
+    };
+  }
+
+  /**
+   * Subscribe to inbound `VoiceTranscript` frames for a session. The
+   * push-to-talk hook merges these into a `TranscriptLog`.
+   */
+  onVoiceTranscript(sessionId: string, handler: (t: VoiceTranscript) => void): Unsubscribe {
+    let subs = this.voiceTranscriptSubscribers.get(sessionId);
+    if (!subs) {
+      subs = new Set();
+      this.voiceTranscriptSubscribers.set(sessionId, subs);
+    }
+    subs.add(handler);
+    return () => {
+      const set = this.voiceTranscriptSubscribers.get(sessionId);
+      if (!set) return;
+      set.delete(handler);
+      if (set.size === 0) this.voiceTranscriptSubscribers.delete(sessionId);
+    };
+  }
+
+  /**
+   * Send a `VoiceSignal` envelope on `voice.<sessionId>.signal`. The
+   * mobile WebRTC module calls this to relay local SDP offers + ICE
+   * candidates to the desktop peer.
+   */
+  async sendVoiceSignal(sessionId: string, signal: VoiceSignal): Promise<void> {
+    if (!this.socket || !this.socket.isOpen()) {
+      throw new Error('Gateway not connected');
+    }
+    const frame: Envelope<VoiceSignal> = {
+      id: `vs_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      topic: voiceTopics.signal(sessionId),
+      type: 'voice.signal',
+      payload: signal,
+      ts: Date.now(),
+    };
+    this.socket.send(encode(frame));
   }
 
   /** Test/debug helper: the token currently bound to the socket, if any. */
