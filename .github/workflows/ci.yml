@@ -28,6 +28,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build @openclaw/protocol
+        # Must run before typecheck: apps/desktop's TS imports resolve via the
+        # package's `types` field (dist/index.d.ts), which only exists post-build.
+        # apps/mobile uses tsconfig paths pointing at src so it doesn't need this,
+        # but unifying ordering is simpler than per-app workarounds.
+        run: pnpm --filter @openclaw/protocol build
+
       - name: Prettier (format:check)
         run: pnpm format:check
 
@@ -39,6 +46,3 @@ jobs:
 
       - name: Tests (across workspaces)
         run: pnpm -r test
-
-      - name: Build @openclaw/protocol
-        run: pnpm --filter @openclaw/protocol build

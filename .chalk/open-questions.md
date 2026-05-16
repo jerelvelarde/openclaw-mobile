@@ -88,6 +88,9 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 22. **Production hardening of the desktop keystore fallback** `[desktop]`
     - P03B's plan calls for the Ed25519 signing key to live in macOS Keychain via `keytar`. On Linux without libsecret (notably this repo's dev container), `keytar` fails to load, so the keystore at `apps/desktop/src/main/pair/keystore.ts` falls back to an AES-256-GCM-encrypted file at `userData/keystore.enc`. The encryption key is derived (`scrypt`) from `/etc/machine-id` (or `os.hostname()+os.platform()` if absent) with a static salt — adequate for the dev loop but not a real defense against an attacker with disk access. Before v1 ships on Linux we need either: (a) a hard dep on libsecret + a clear install error if it's missing, (b) a Tauri-style OS-keyring wrapper that fails closed, or (c) an explicit user-supplied passphrase derived via PBKDF2. macOS + Windows users hit the keytar path and are unaffected. Revisit alongside the existing question about where the per-gateway signing keypair lives (A.9 territory).
 
+23. **Protocol build must precede typecheck** `[root]` `[process]`
+    - `apps/desktop`'s TS resolves `@openclaw/protocol` via the package's `types` field (`dist/index.d.ts`), which only exists after `pnpm --filter @openclaw/protocol build`. `apps/mobile` uses tsconfig paths pointing at `src`, so it's immune. Surfaced by P03A (Wave 4). Fixed for CI by moving the protocol build step to before typecheck in `.github/workflows/ci.yml`. **Local dev** still trips up when running `pnpm -r typecheck` on a fresh clone — document the build-first ordering in the root README, or unify on a `types: src` strategy across workspaces (cleaner, but breaks once we publish protocol). Decide before P05C.
+
 ---
 
 ## B. Decisions we can make as we go
