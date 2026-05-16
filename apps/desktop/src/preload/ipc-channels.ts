@@ -22,6 +22,8 @@ export const IPC = {
    * is clicked). Payload is the page hash to show.
    */
   NAVIGATE: 'pairing:navigate',
+  /** Renderer → main: fetch the current `SettingsFile` (P04B). */
+  SETTINGS_GET: 'settings:get',
 } as const;
 
 /** Payload sent over `PAIRING_PENDING_EVENT` and returned by `PAIRING_LIST_PENDING`. */
@@ -38,4 +40,14 @@ export interface PairedDeviceView {
   device_name: string;
   paired_at: number;
   last_seen: number;
+}
+
+/**
+ * Payload returned by `SETTINGS_GET`. Mirrors `SettingsFile` in
+ * `main/settings.ts`. Re-declared here so the preload bridge doesn't
+ * import from the main-process tree.
+ */
+export interface SettingsView {
+  version: 1;
+  lan_enabled: boolean;
 }

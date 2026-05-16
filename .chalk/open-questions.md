@@ -91,6 +91,9 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 23. **Protocol build must precede typecheck** `[root]` `[process]`
     - `apps/desktop`'s TS resolves `@openclaw/protocol` via the package's `types` field (`dist/index.d.ts`), which only exists after `pnpm --filter @openclaw/protocol build`. `apps/mobile` uses tsconfig paths pointing at `src`, so it's immune. Surfaced by P03A (Wave 4). Fixed for CI by moving the protocol build step to before typecheck in `.github/workflows/ci.yml`. **Local dev** still trips up when running `pnpm -r typecheck` on a fresh clone — document the build-first ordering in the root README, or unify on a `types: src` strategy across workspaces (cleaner, but breaks once we publish protocol). Decide before P05C.
 
+24. **Live `lan_enabled` toggle on desktop** `[desktop]`
+    - P04B introduced `userData/settings.json` with `lan_enabled` (default `true`). The renderer Settings page renders the value read-only and the bind address is decided once at app start. Toggling at runtime would require closing the fastify listener, rebinding to the new host, and starting/stopping Bonjour in lockstep — fiddly because we'd also need to invalidate the runtime URL stored on already-paired devices. For v1 we accept "edit JSON + restart" as the workflow. Revisit when we have a packaged build whose users won't tolerate manual JSON edits.
+
 ---
 
 ## B. Decisions we can make as we go

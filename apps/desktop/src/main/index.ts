@@ -1,16 +1,20 @@
 // Electron main process for the OpenClaw desktop shell.
 //
 // P02B opened a hidden BrowserWindow + tray (Show / Quit) and a single-
-// instance lock. P03B now boots the pairing controller as well: it loads
-// or creates the Ed25519 signing key, opens a fastify HTTP server on
-// `127.0.0.1:18789` (loopback only — LAN exposure is P04B), and wires
-// up IPC handlers + the macOS pairing notification.
+// instance lock. P03B booted the pairing controller: it loads or creates
+// the Ed25519 signing key, opens a fastify HTTP server on
+// `127.0.0.1:18789`, and wires up IPC handlers + the macOS pairing
+// notification. P04B opens the same port to the LAN (gated by
+// `settings.lan_enabled`), advertises `_openclaw._tcp.local.` via
+// `bonjour-service`, attaches an authenticated WebSocket transport on
+// `/ws`, and bridges incoming frames to an in-process stub gateway.
 //
 // macOS-only behaviors (`Tray`, `app.dock.hide`, `Notification` actions)
 // are guarded with `process.platform === "darwin"` so Linux dev/CI can
 // still boot the build without a tray icon asset or a dock to hide.
 
 import { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage } from 'electron';
+import { hostname as osHostname } from 'node:os';
 import { join } from 'node:path';
 
 // Imported only to prove the `@openclaw/protocol` workspace link resolves in
@@ -18,7 +22,12 @@ import { join } from 'node:path';
 // as a type so tree-shaking drops it at runtime.
 import type { Agent } from '@openclaw/protocol';
 import { buildPairingController, PairingController } from './pair/controller';
-import { DEFAULT_PORT } from './pair/server';
+import { buildRuntimeUrl, DEFAULT_PORT } from './pair/server';
+import { SettingsStore } from './settings';
+import { createBonjourPublisher, type BonjourPublisher } from './transport/bonjour';
+import { createRouter, type Router } from './transport/router';
+import { attachWsServer, type WsTransport } from './transport/wsServer';
+import { attachStubGateway, type StubGateway } from './gateway/stub';
 import { IPC } from '../preload/ipc-channels';
 
 const IS_MAC = process.platform === 'darwin';
@@ -28,6 +37,12 @@ const APP_VERSION = app.getVersion();
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let pairing: PairingController | null = null;
+let bonjour: BonjourPublisher | null = null;
+let wsTransport: WsTransport | null = null;
+let stubGateway: StubGateway | null = null;
+let router: Router | null = null;
+let settings: SettingsStore | null = null;
+let lanEnabled = true;
 
 // Keep the placeholder import live for typecheck without polluting runtime.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -95,6 +110,32 @@ function showWindowOnRoute(route: string): void {
   mainWindow.webContents.send(IPC.NAVIGATE, route);
 }
 
+function buildTrayMenu(): Electron.Menu {
+  const lanLabel = `LAN: ${lanEnabled ? 'enabled' : 'disabled'}`;
+  const bonjourLabel = `Bonjour: ${bonjour?.state === 'advertising' ? 'advertising' : 'idle'}`;
+  return Menu.buildFromTemplate([
+    { label: 'Show', click: toggleMainWindow },
+    { label: 'Paired devices…', click: () => showWindowOnRoute('/devices') },
+    { label: 'Settings…', click: () => showWindowOnRoute('/settings') },
+    { type: 'separator' },
+    { label: lanLabel, enabled: false },
+    { label: bonjourLabel, enabled: false },
+    { type: 'separator' },
+    {
+      label: 'Quit',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+}
+
+function refreshTrayMenu(): void {
+  if (!tray) return;
+  tray.setContextMenu(buildTrayMenu());
+}
+
 function createTray(): void {
   if (!IS_MAC) {
     // Tray is macOS-only for P02B. Other platforms get a normal window on
@@ -117,33 +158,80 @@ function createTray(): void {
 
   tray = new Tray(image);
   tray.setToolTip('OpenClaw');
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: 'Show', click: toggleMainWindow },
-      { label: 'Paired devices…', click: () => showWindowOnRoute('/devices') },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          isQuitting = true;
-          app.quit();
-        },
-      },
-    ]),
-  );
+  tray.setContextMenu(buildTrayMenu());
   tray.on('click', toggleMainWindow);
 }
 
 async function bootPairing(): Promise<void> {
+  settings = new SettingsStore(app.getPath('userData'));
+  const cfg = settings.read();
+  lanEnabled = cfg.lan_enabled;
+
+  const host = lanEnabled ? '0.0.0.0' : '127.0.0.1';
+  // For `runtime_url` we want a value mobile can actually reach. When LAN
+  // is on, the Mac's hostname is what Bonjour also advertises; when LAN
+  // is off, loopback is correct (only the local renderer will call it).
+  const runtimeHost = lanEnabled ? osHostname() : '127.0.0.1';
+
   pairing = await buildPairingController({
     userDataDir: app.getPath('userData'),
     version: APP_VERSION,
     ipcMain,
     getWindow: getMainWindow,
     Notification: IS_MAC ? Notification : undefined,
+    runtimeUrl: buildRuntimeUrl(runtimeHost, PORT),
   });
-  // Bind to loopback only — LAN exposure is P04B.
-  await pairing.server.fastify.listen({ host: '127.0.0.1', port: PORT });
+
+  await pairing.server.fastify.listen({ host, port: PORT });
+
+  // ---- WS transport + stub gateway --------------------------------------
+  router = createRouter();
+  stubGateway = attachStubGateway(router);
+  wsTransport = attachWsServer({
+    fastify: pairing.server.fastify,
+    publicKey: pairing.signingKey.publicKey,
+    router,
+  });
+
+  // ---- Bonjour ----------------------------------------------------------
+  if (lanEnabled) {
+    bonjour = createBonjourPublisher({
+      gatewayId: pairing.gatewayId,
+      version: APP_VERSION,
+      port: PORT,
+    });
+    bonjour.start();
+    if (bonjour.state === 'error') {
+      // Don't crash the app; log + leave the WS server up. The tray menu
+      // will show "Bonjour: idle" so the user can see something's off.
+      // eslint-disable-next-line no-console
+      console.warn('[openclaw] Bonjour publish failed:', bonjour.lastError);
+    }
+  }
+
+  refreshTrayMenu();
+}
+
+async function teardownTransport(): Promise<void> {
+  try {
+    stubGateway?.detach();
+  } catch {
+    // ignore
+  }
+  stubGateway = null;
+  try {
+    await wsTransport?.close();
+  } catch {
+    // ignore
+  }
+  wsTransport = null;
+  try {
+    await bonjour?.stop();
+  } catch {
+    // ignore
+  }
+  bonjour = null;
+  router = null;
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -164,7 +252,10 @@ if (!gotSingleInstanceLock) {
   });
 
   app.on('will-quit', () => {
-    void pairing?.close();
+    void (async (): Promise<void> => {
+      await teardownTransport();
+      await pairing?.close();
+    })();
   });
 
   // On macOS the app stays alive in the menu bar with no windows; on other
@@ -187,7 +278,22 @@ if (!gotSingleInstanceLock) {
     } catch (err) {
       // Don't take the whole app down if the port is busy in dev; just
       // log + leave the renderer up. P04B will add a real diagnostic UX.
+      // eslint-disable-next-line no-console
       console.error('[openclaw] failed to start pairing server:', err);
     }
   });
 }
+
+// Register the settings IPC at module load: the renderer's Settings page
+// can read + (eventually) write `lan_enabled` without depending on
+// `bootPairing` having succeeded. v1 only exposes the read path; toggling
+// at runtime is intentionally out of scope (a restart picks up the new
+// value — see open question 24).
+ipcMain.handle(IPC.SETTINGS_GET, async () => {
+  // Lazy-construct the store if it doesn't exist yet (e.g. in early
+  // renderer load before `bootPairing`).
+  if (!settings) {
+    settings = new SettingsStore(app.getPath('userData'));
+  }
+  return settings.read();
+});
