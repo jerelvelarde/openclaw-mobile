@@ -104,21 +104,6 @@ export type ThreadEvent =
     };
 
 // `CanvasSurface` + `CanvasPatch` live in `./canvas/types.ts` as of P06.0.
-// They are re-exported from `./index.ts` so consumers see the same import
+// `VoiceOpts` + `VoiceSession` live in `./voice/types.ts` as of P07.0.
+// Both are re-exported from `./index.ts` so consumers see the same import
 // path they did before.
-
-/** Caller options for opening a voice session. */
-export interface VoiceOpts {
-  /** Push-to-talk vs continuous. */
-  mode: 'ptt' | 'continuous';
-  /** Sample rate the client will send frames at. */
-  sampleRate: number;
-}
-
-/** Handle returned by `GatewayClient.openVoice`. Real frame shape lands in P07.0. */
-export interface VoiceSession {
-  id: string;
-  mode: 'ptt' | 'continuous';
-  /** Tear down the voice session. */
-  close(): Promise<void>;
-}
