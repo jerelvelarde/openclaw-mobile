@@ -255,3 +255,92 @@ main {
   border-color: var(--oc-accent);
   background: var(--oc-accent-soft);
 }
+
+/* ── Canvas renderer (P06B) ─────────────────────────────────────────── */
+/* Minimal, parity with mobile (P06A). Visual polish lives in P09B. */
+
+.oc-message--canvas {
+  align-items: stretch;
+  width: 100%;
+}
+
+.oc-canvas-wrap {
+  width: 100%;
+}
+
+.oc-canvas {
+  border: 1px solid var(--oc-border);
+  border-radius: 10px;
+  background: var(--oc-bg);
+  padding: 10px 12px;
+}
+
+.oc-canvas--loading,
+.oc-canvas--error {
+  color: var(--oc-muted);
+  font-size: 0.9em;
+}
+
+.oc-canvas--error {
+  color: var(--oc-status-error);
+}
+
+.oc-canvas-stack {
+  display: flex;
+  gap: 8px;
+}
+
+.oc-canvas-stack--vertical {
+  flex-direction: column;
+}
+
+.oc-canvas-stack--horizontal {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.oc-canvas-heading {
+  margin: 4px 0;
+}
+
+.oc-canvas-text {
+  margin: 0;
+}
+
+.oc-canvas-button {
+  border-radius: 8px;
+  border: 1px solid var(--oc-border);
+  background: var(--oc-bubble-agent);
+  color: var(--oc-bubble-agent-fg);
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.oc-canvas-button--primary {
+  background: var(--oc-accent);
+  color: white;
+  border-color: var(--oc-accent);
+}
+
+.oc-canvas-button--destructive {
+  background: var(--oc-status-error);
+  color: white;
+  border-color: var(--oc-status-error);
+}
+
+.oc-canvas-input,
+.oc-canvas-select {
+  border: 1px solid var(--oc-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--oc-bg);
+  color: var(--oc-fg);
+  font: inherit;
+}
+
+.oc-canvas-list {
+  margin: 0;
+  padding-left: 20px;
+}

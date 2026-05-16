@@ -261,4 +261,138 @@ describe('useGateway', () => {
     expect(captured!.status).toBe('closed');
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
+
+  it('caches canvas.surface pushes and exposes them via canvas.peekCanvas', async () => {
+    FakeWebSocket.instances = [];
+    let captured: GatewayHandle | null = null;
+    render(<Harness onHandle={(h) => (captured = h)} />);
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    const ws = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      ws.open();
+      await flushMicrotasks();
+    });
+
+    const surface = {
+      id: 'surface_demo',
+      version: 1 as const,
+      root: { type: 'text' as const, id: 't', text: 'Hello' },
+    };
+    await act(async () => {
+      ws.emit({
+        id: 'srv-canvas-1',
+        topic: 'canvas.demo.surface',
+        type: 'canvas.surface',
+        payload: surface,
+        ts: Date.now(),
+      });
+      await flushMicrotasks();
+    });
+    expect(captured!.canvas.peekCanvas('surface_demo')).toEqual(surface);
+    // A canvas placeholder message lands in the conversation.
+    const canvasMessage = captured!.messages.find((m) => m.surfaceId === 'surface_demo');
+    expect(canvasMessage).toBeDefined();
+  });
+
+  it('routes canvas.patch frames to onCanvasUpdate subscribers', async () => {
+    FakeWebSocket.instances = [];
+    let captured: GatewayHandle | null = null;
+    render(<Harness onHandle={(h) => (captured = h)} />);
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    const ws = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      ws.open();
+      await flushMicrotasks();
+    });
+
+    const received: unknown[] = [];
+    const off = captured!.canvas.onCanvasUpdate('surface_demo', (p) => received.push(p));
+
+    const patch = {
+      surfaceId: 'surface_demo',
+      ts: 42,
+      ops: [{ op: 'setText', id: 't', text: 'Updated' }],
+    };
+    await act(async () => {
+      ws.emit({
+        id: 'srv-patch-1',
+        topic: 'canvas.demo.patch',
+        type: 'canvas.patch',
+        payload: patch,
+        ts: Date.now(),
+      });
+      await flushMicrotasks();
+    });
+    expect(received).toEqual([patch]);
+    off();
+  });
+
+  it('dispatchCanvasEvent sends a canvas.event frame', async () => {
+    FakeWebSocket.instances = [];
+    let captured: GatewayHandle | null = null;
+    render(<Harness onHandle={(h) => (captured = h)} />);
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    const ws = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      ws.open();
+      await flushMicrotasks();
+    });
+
+    // First send is agents.list — clear and assert on next send.
+    ws.sent.length = 0;
+    captured!.canvas.dispatchCanvasEvent({
+      surfaceId: 'surface_demo',
+      nodeId: 'btn',
+      type: 'click',
+      payload: { action: 'save' },
+    });
+    expect(ws.sent).toHaveLength(1);
+    const outbound = JSON.parse(ws.sent[0]!);
+    expect(outbound.type).toBe('canvas.event');
+    expect(outbound.topic).toBe('canvas.surface_demo.event');
+    expect(outbound.payload).toEqual({
+      surfaceId: 'surface_demo',
+      nodeId: 'btn',
+      type: 'click',
+      payload: { action: 'save' },
+    });
+  });
+
+  it('getCanvas resolves with a previously-cached surface synchronously', async () => {
+    FakeWebSocket.instances = [];
+    let captured: GatewayHandle | null = null;
+    render(<Harness onHandle={(h) => (captured = h)} />);
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    const ws = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      ws.open();
+      await flushMicrotasks();
+    });
+
+    const surface = {
+      id: 'surface_demo',
+      version: 1 as const,
+      root: { type: 'text' as const, id: 't', text: 'Hi' },
+    };
+    await act(async () => {
+      ws.emit({
+        id: 'srv-canvas-1',
+        topic: 'canvas.demo.surface',
+        type: 'canvas.surface',
+        payload: surface,
+        ts: Date.now(),
+      });
+      await flushMicrotasks();
+    });
+    const got = await captured!.canvas.getCanvas('surface_demo');
+    expect(got).toEqual(surface);
+  });
 });
