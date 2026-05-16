@@ -28,6 +28,7 @@ import { createBonjourPublisher, type BonjourPublisher } from './transport/bonjo
 import { createRouter, type Router } from './transport/router';
 import { attachWsServer, type WsTransport } from './transport/wsServer';
 import { attachStubGateway, type StubGateway } from './gateway/stub';
+import { registerCopilotRuntime } from './copilot/runtime';
 import { IPC } from '../preload/ipc-channels';
 
 const IS_MAC = process.platform === 'darwin';
@@ -188,6 +189,18 @@ async function bootPairing(): Promise<void> {
   router = createRouter();
   stubGateway = attachStubGateway(router);
   wsTransport = attachWsServer({
+    fastify: pairing.server.fastify,
+    publicKey: pairing.signingKey.publicKey,
+    router,
+  });
+
+  // ---- CopilotKit runtime adapter ---------------------------------------
+  // Mounts POST /copilot/runtime/agent/:agentId/run on the same fastify
+  // server. This is the live endpoint mobile's CopilotKit client points
+  // at via the `runtime_url` returned at pairing time. P04B's URL
+  // builder already returns `/copilot/runtime`, so registering the
+  // route here makes the contract live.
+  registerCopilotRuntime({
     fastify: pairing.server.fastify,
     publicKey: pairing.signingKey.publicKey,
     router,
