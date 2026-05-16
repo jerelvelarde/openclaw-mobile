@@ -17,7 +17,7 @@ import type {
   VoiceOpts,
   VoiceSession,
 } from './types';
-import type { CanvasPatch, CanvasSurface } from './canvas';
+import type { CanvasEvent, CanvasPatch, CanvasSurface } from './canvas';
 
 /** Removes a previously-registered listener. */
 export type Unsubscribe = () => void;
@@ -101,6 +101,14 @@ export interface GatewayClient {
 
   /** Subscribe to incremental updates for a Canvas surface. */
   onCanvasUpdate(surfaceId: string, handler: (patch: CanvasPatch) => void): Unsubscribe;
+
+  /**
+   * POST a `CanvasEvent` back to the agent. Renderer node components call
+   * this when the user taps a button, edits a text input, or picks from a
+   * select. Fire-and-forget by contract — transport errors surface via
+   * the connection-level `error` event, not the returned promise.
+   */
+  postCanvasEvent(event: CanvasEvent): Promise<void>;
 
   // ── Voice ───────────────────────────────────────────────────────────────
 
