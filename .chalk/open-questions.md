@@ -76,6 +76,9 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
 15. **Prettier scope vs. planning docs** `[root]`
     - P00 added `.chalk/` to `.prettierignore` so the per-task plan files (which are owned by the planning process and which sub-agents are told not to edit) don't fail `pnpm format:check`. If we later want Prettier to enforce style on the planning docs too, we'd need a separate "format-planning-docs" workflow or to relax the don't-edit rule for sub-agents. Revisit once the planning docs stabilize.
 
+16. **`tsup` DTS + `composite: true` interaction** `[root]`
+    - P01A wanted `packages/protocol/tsconfig.json` to set `composite: true`. With that flag set, `tsup`'s DTS step (via rollup-plugin-dts) reports TS6307 because its synthesized virtual project doesn't honor the `include` glob. We worked around it by adding a sibling `packages/protocol/tsconfig.build.json` (same options minus `composite`) and pointing `tsup.config.ts` at it. If we later add more workspace packages that all need composite + DTS, consider standardizing on this pattern (or switching the DTS step to `tsc -b` once we wire up project references). Revisit when P01B / per-package CI lands.
+
 ---
 
 ## B. Decisions we can make as we go
