@@ -7,16 +7,19 @@ Hermes ecosystem rather than forking it.
 
 ## The picture
 
-- **Harness:** [OpenClaw](https://github.com/openclaw/openclaw) gateway daemon, running on the user's machine.
+- **Host hardware:** always-on Mac mini (see `host-target.md`).
+- **Desktop companion:** **`openclaw-desktop`** (Electron, sibling repo — see `desktop-app.md`). Supervises the gateway, handles pairing approvals, advertises Bonjour, fans out push notifications.
+- **Harness:** [OpenClaw](https://github.com/openclaw/openclaw) gateway daemon, supervised by the desktop app.
 - **Agents:** any agent OpenClaw can route to. Day-one targets:
   - OpenClaw's own skill agents (workspace at `~/.openclaw/workspace`, skills as `AGENTS.md` / `SOUL.md` / `TOOLS.md`).
   - [Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research, which interoperates with OpenClaw (`hermes claw migrate`) and is model-agnostic across Nous Portal, OpenRouter, NovitaAI, NVIDIA NIM, OpenAI, Hugging Face, etc.
-- **Mobile app:** an OpenClaw "device node" — pairs to the gateway over WebSocket, surfaces chat + Canvas + voice, never runs an agent itself.
+- **Mobile app:** an OpenClaw "device node" — pairs to the gateway over WebSocket via the desktop app, surfaces chat + Canvas + voice, never runs an agent itself.
 
 ```
-phone (this app)  ──WSS──►  openclaw gateway :18789  ──►  agent (Hermes or OpenClaw skill)  ──►  LLM provider
-                                       │
-                                       └──► other channels (Telegram, WhatsApp, Slack, Discord, Signal, iMessage)
+phone (this app) ──WSS──► openclaw-desktop (Electron) ──IPC──► openclaw gateway :18789 ──► agent (Hermes / skill) ──► LLM provider
+                                   │                                       │
+                                   └─ Bonjour, pairing UI,                 └─ other channels (Telegram, WA, Slack, …)
+                                      push fan-out, supervision
 ```
 
 ---
@@ -25,26 +28,27 @@ phone (this app)  ──WSS──►  openclaw gateway :18789  ──►  agent 
 
 | Concern               | Approach                                                                                  |
 | --------------------- | ----------------------------------------------------------------------------------------- |
-| Install / run         | We don't bundle or wrap OpenClaw. User runs `openclaw onboard --install-daemon` then `openclaw gateway --port 18789`. |
-| Pairing               | Mirror OpenClaw's DM pairing-code UX. Approval happens on the host via `openclaw pairing approve mobile <code>` (or the menu-bar app). |
-| Transport             | WebSocket to the gateway (`ws://host:18789` on LAN, `wss://…` via Tailscale or relay).    |
-| Workspace             | We never write to `~/.openclaw/workspace`. v1 reads agent/skill list only.                |
-| Multi-agent routing   | Use the gateway's built-in router; expose "active agent" switching in the UI.             |
-| Channels              | We're a peer to Telegram/Slack/etc., not a replacement. Optional "forward to channel" action lets the user route a thread elsewhere. |
-| CopilotKit runtime    | If the gateway exposes one natively, use it. Otherwise ship a small adapter (`packages/openclaw-copilot-runtime`) the user can run alongside the gateway. |
+| Install / run         | Recommended: install `openclaw-desktop` (signed `.dmg`); it installs and supervises the gateway. Fallback: `openclaw onboard --install-daemon` + manual `openclaw gateway --port 18789`. |
+| Pairing               | Mirror OpenClaw's DM pairing-code UX. Approval happens in the **openclaw-desktop** UI / macOS notification (fallback: `openclaw pairing approve mobile <code>` CLI). |
+| Transport             | WebSocket to the gateway, advertised by the desktop app at pairing time (`ws://host:18789` on LAN, `wss://…` via Tailscale or relay). |
+| Workspace             | Neither app writes to `~/.openclaw/workspace`. v1 reads agent/skill list only.            |
+| Multi-agent routing   | Use the gateway's built-in router; both apps expose "active agent" switching in their UI. |
+| Channels              | Both apps are peers to Telegram/Slack/etc., not a replacement. Optional "forward to channel" action lets the user route a thread elsewhere. |
+| CopilotKit runtime    | If the gateway exposes one natively, use it. Otherwise the desktop app embeds the adapter and advertises `runtime_url` to mobile at pairing time. |
 
 ### Adapter strategy (only if needed)
 
 If OpenClaw's WS protocol doesn't map directly onto CopilotKit's runtime
-contract, we ship a single-binary Node adapter:
+contract, the **openclaw-desktop** Electron app embeds the adapter
+in-process:
 
 - Listens on a local HTTP port (e.g. `:18790`).
 - Speaks CopilotKit's runtime protocol on `/copilot/runtime`.
 - Translates to OpenClaw's WS topics underneath.
-- Installable via `npx @openclaw/copilot-adapter` or as a sibling daemon.
+- Bundled inside the Electron app so users don't manage a separate process.
 
-The mobile app doesn't need to know which mode is in use — `runtimeUrl`
-points wherever the user configured it.
+The mobile app doesn't need to know which mode is in use — it uses whatever
+`runtime_url` the desktop app handed it at pairing time.
 
 ---
 
@@ -70,13 +74,15 @@ This keeps the door open for swapping in other agents (or future Nous projects) 
 
 ## Conformance checklist (run before tagging v1)
 
-- [ ] Pairing works end-to-end with the upstream `openclaw gateway` binary, no fork.
-- [ ] No writes to `~/.openclaw/workspace` from the app.
+- [ ] Pairing works end-to-end via `openclaw-desktop` on a real Mac mini + upstream `openclaw gateway`, no fork of either.
+- [ ] CLI-only fallback pairing (no desktop app) still works on a Linux host.
+- [ ] No writes to `~/.openclaw/workspace` from either app.
 - [ ] `listAgents()` correctly reflects both OpenClaw skills and a Hermes-routed agent when both are installed.
 - [ ] Chat against Hermes streams tokens and tool calls without app-side special-casing.
-- [ ] Canvas surfaces from OpenClaw render with no agent-specific branches.
+- [ ] Canvas surfaces from OpenClaw render identically in mobile and desktop with no agent-specific branches.
 - [ ] Voice round-trips through the gateway to the active agent regardless of which agent it is.
 - [ ] App degrades cleanly if only OpenClaw skills are installed (no Hermes), and vice versa.
+- [ ] Mobile reconnects cleanly when the network transport changes (LAN ↔ Tailscale ↔ cellular) without re-pairing.
 
 ---
 

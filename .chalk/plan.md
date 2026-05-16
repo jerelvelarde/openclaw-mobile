@@ -3,10 +3,15 @@
 A mobile **device node** for [OpenClaw](https://github.com/openclaw/openclaw),
 the local-first personal-AI gateway that runs as a daemon on your own machine.
 
-Your laptop/desktop/home server runs `openclaw gateway` on port `18789`. This
-app pairs to it over WebSocket and becomes another surface for your agents —
-chat, Canvas, voice — alongside the messaging channels OpenClaw already speaks
-(WhatsApp, Telegram, Slack, Discord, Signal, iMessage, …).
+The v1 design assumes a single, concrete host shape: an **always-on Mac mini
+(or equivalent) sitting at home**, running `openclaw gateway` 24/7. The phone
+finds it on the LAN via Bonjour, pairs once, and reconnects from anywhere
+(cellular, Tailscale, work Wi-Fi) using the same token. See `host-target.md`
+for the full host profile and what we ask the user to set up once.
+
+This app pairs to that gateway over WebSocket and becomes another surface for
+your agents — chat, Canvas, voice — alongside the messaging channels OpenClaw
+already speaks (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, …).
 
 The agents themselves are pluggable. We're explicitly compatible with:
 
@@ -14,8 +19,9 @@ The agents themselves are pluggable. We're explicitly compatible with:
 - **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** from Nous Research, which interoperates with OpenClaw (`hermes claw migrate`) and is model-agnostic across Nous Portal, OpenRouter, NovitaAI, NVIDIA NIM, Hugging Face, OpenAI, etc.
 
 Built with **Expo (React Native + Web)** and **CopilotKit's React Native
-runtime** for the chat surface. See `compatibility.md` for the harness/agent
-matrix and `milestones.md` for delivery.
+runtime** for the chat surface. See `host-target.md` for host assumptions,
+`compatibility.md` for the harness/agent matrix, and `milestones.md` for
+delivery.
 
 ---
 
@@ -47,30 +53,57 @@ matrix and `milestones.md` for delivery.
 
 ## 3. How the pieces fit
 
+We mirror the **Claude desktop + Claude mobile** pattern: a desktop companion
+runs on the always-on Mac mini and is the primary surface for the user when
+they're at their desk; the mobile app is the same persona, reachable
+anywhere. Both speak to the same OpenClaw gateway. This means **two apps**
+plus the upstream gateway:
+
+- **`openclaw-mobile`** (this repo) — Expo / React Native phone + web client.
+- **`openclaw-desktop`** (sibling repo, to be created) — Electron menu-bar app that wraps and supervises the OpenClaw gateway daemon on the Mac mini, exposes a desktop chat UI, and is the "trust anchor" for device pairing.
+- **`openclaw`** (upstream) — the gateway daemon + skills/agents.
+
 ```
-┌────────────────────────┐         ┌──────────────────────────────────────┐
-│  openclaw-mobile       │  WSS    │  User's machine (macOS/Linux/Win)     │
-│  (Expo: iOS/Android/Web)│ ◄────► │                                       │
-│  - Pairing flow        │         │  openclaw gateway :18789 (daemon)     │
-│  - CopilotKit chat     │         │   ├─ workspace ~/.openclaw/workspace  │
-│  - Canvas renderer     │         │   ├─ skills (AGENTS.md/SOUL.md/...)   │
-│  - Voice (PTT)         │         │   ├─ multi-agent router               │
-└────────────────────────┘         │   └─ channels (WA, TG, Slack, …)      │
-                                   │                                       │
-                                   │  Agent process(es):                   │
-                                   │   • OpenClaw built-in skill agents    │
-                                   │   • hermes-agent (Nous Research)      │
-                                   │     + any LLM provider it's wired to  │
-                                   └──────────────────────────────────────┘
+┌────────────────────────┐                ┌────────────────────────────────────────┐
+│  openclaw-mobile       │                │  Mac mini (always-on)                  │
+│  (Expo: iOS/Android/Web)│               │                                        │
+│  - Pairing UI          │  ── WSS ──►   │  ┌──────────────────────────────────┐  │
+│  - CopilotKit chat     │  (Bonjour /    │  │  openclaw-desktop (Electron)     │  │
+│  - Canvas renderer     │   Tailscale)   │  │  - Menu bar / tray icon          │  │
+│  - Voice (PTT)         │                │  │  - Pairing approvals             │  │
+└────────────────────────┘                │  │  - Desktop chat + Canvas         │  │
+                                          │  │  - Settings / agents / logs      │  │
+                                          │  │  - Supervises gateway daemon     │  │
+                                          │  └──────────┬───────────────────────┘  │
+                                          │             │ local IPC                │
+                                          │             ▼                          │
+                                          │  openclaw gateway :18789 (launchd)     │
+                                          │   ├─ workspace ~/.openclaw/workspace   │
+                                          │   ├─ skills (AGENTS.md/SOUL.md/...)    │
+                                          │   ├─ multi-agent router                │
+                                          │   └─ channels (WA, TG, Slack, …)       │
+                                          │                                        │
+                                          │  Agent process(es):                    │
+                                          │   • OpenClaw built-in skill agents     │
+                                          │   • hermes-agent (Nous Research)       │
+                                          │     + any LLM provider it's wired to   │
+                                          └────────────────────────────────────────┘
 ```
 
-Reachability between phone and gateway is a real problem (the phone is usually
-on cellular, the gateway is at home). v1 supports three transports, in order
-of preference (see `open-questions.md` §A1 for what we still need to confirm):
+See `desktop-app.md` for the Electron app's responsibilities and its
+contract with this mobile app.
 
-1. **Local LAN** — same Wi-Fi: `ws://gateway.local:18789` or mDNS discovery.
-2. **Tailscale / Wireguard** — user already runs an overlay network; we just need a hostname.
-3. **Relay** — if OpenClaw exposes a hosted relay, fall back to that; otherwise document `cloudflared` / `ngrok` as a manual option.
+### Reachability
+
+Because the host is always-on and on the user's LAN, we get a concrete
+3-tier transport story (in order of preference):
+
+1. **Local LAN via Bonjour.** Both apps register/discover `_openclaw._tcp.local.`; on the same Wi-Fi the phone finds the Mac mini automatically.
+2. **Tailscale (recommended for remote).** Phone uses the Mac mini's MagicDNS name. The Electron app helps the user enable this during onboarding.
+3. **Manual URL.** Paste a `ws(s)://…` for Cloudflare Tunnel, ngrok, or custom proxies.
+
+Transports are interchangeable: the pairing token is device-bound, not
+network-bound. Pair once on LAN, then reconnect from anywhere.
 
 ---
 
@@ -103,9 +136,9 @@ Expo Router tree:
 ```
 app/
   (pairing)/
-    welcome.tsx              # explain "this app pairs to your OpenClaw gateway"
-    connect.tsx              # enter gateway URL (or pick discovered) → request pairing
-    code.tsx                 # show DM pairing code, wait for approval
+    welcome.tsx              # "Make sure openclaw-desktop is running on your Mac"
+    discover.tsx             # Bonjour scan → pick discovered host (or paste URL)
+    code.tsx                 # show 6-digit pairing code; user approves in openclaw-desktop
   (tabs)/
     index.tsx                # Home: active agent, recent threads, quick voice CTA
     threads/
@@ -113,18 +146,18 @@ app/
       [id].tsx               # Thread: Chat | Canvas | Tools (per-message)
     agents.tsx               # Which agent(s) are reachable; switch active route
     voice.tsx                # Voice session (PTT + continuous)
-    settings.tsx             # Gateway URL, pairing reset, notifications, theme
+    settings.tsx             # Host status, re-pair, push prefs, theme, diagnostics
   _layout.tsx                # CopilotKit + GatewayProvider + theme + query
 ```
 
 ### Key screens
 
-1. **Welcome / Connect / Code** — first-run pairing. The user runs `openclaw pairing approve mobile <code>` on their machine (or approves via the menu-bar app) and the WS upgrades to a trusted session.
+1. **Welcome / Discover / Code** — first-run pairing. The phone scans for `_openclaw._tcp.local.`, the user picks their Mac mini, the phone displays a 6-digit code, and the user clicks "Approve" in the **openclaw-desktop** menu-bar app on the Mac. (CLI fallback: `openclaw pairing approve mobile <code>`.)
 2. **Home** — current active agent (e.g. "Hermes via OpenRouter / Sonnet 4.6"), recent threads, big voice button.
 3. **Thread** — CopilotKit chat against the gateway; Canvas surfaces inline; tool-call inspector.
-4. **Agents** — list of agents the gateway exposes (skills + Hermes if installed); switch which one this device routes to.
+4. **Agents** — list of agents the desktop exposes (skills + Hermes if installed); switch which one this device routes to.
 5. **Voice** — full-screen voice session; waveform, transcript, interruption.
-6. **Settings** — gateway URL/host, re-pair, push prefs, theme, diagnostic logs.
+6. **Settings** — host name/URL, "Mac mini status" (online / version / agents), re-pair, push prefs, theme, diagnostic logs.
 
 ---
 
@@ -151,9 +184,11 @@ const { gatewayUrl, pairingToken } = useGateway(); // from secure store
 </CopilotKit>
 ```
 
-If OpenClaw doesn't yet expose a CopilotKit-compatible runtime endpoint, we
-ship a tiny adapter (`packages/openclaw-copilot-runtime`) that the user runs
-alongside the gateway — see `compatibility.md`.
+If the OpenClaw gateway doesn't expose a CopilotKit-compatible runtime
+endpoint directly, the **openclaw-desktop** Electron app ships the adapter
+as a sibling process (or bundles it in-process). The mobile app doesn't need
+to know which mode is in use — `runtimeUrl` points wherever the desktop app
+advertised at pairing time.
 
 Client-side **actions** the copilot can invoke on the device:
 
@@ -210,10 +245,11 @@ without UI changes.
 
 ## 8. Compatibility constraints we've already locked in
 
-- **Pairing UX must mirror OpenClaw's existing model.** OpenClaw already uses DM pairing codes for unknown messaging senders, approved with `openclaw pairing approve <channel> <code>`. We use the same shape so users only learn one mental model.
-- **Don't fork the agent contract.** Skills are prompt files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`) in the workspace. The mobile app never writes to those — it just renders what agents emit and forwards what the user says.
-- **Hermes-as-agent path is via OpenClaw routing.** We don't talk to Hermes directly. The gateway routes the active conversation to a Hermes process (or any other compatible agent). One thread, one gateway, multiple possible agents.
-- **MCP tools surface through the agent, not the app.** Hermes supports MCP; OpenClaw exposes tools via the skill files. The mobile app does not host MCP servers itself.
+- **Two-app pattern (desktop + mobile), like Claude.** The Mac mini runs `openclaw-desktop` (Electron) which is the trust anchor; the phone runs this app. Both speak to the same OpenClaw gateway. The desktop app is responsible for approving pairings and supervising the daemon.
+- **Pairing UX mirrors OpenClaw's existing model.** OpenClaw already uses DM pairing codes for unknown messaging senders. We use the same shape but approval happens in `openclaw-desktop`'s UI (with the CLI as fallback).
+- **Don't fork the agent contract.** Skills are prompt files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`) in the workspace. Neither app writes to those — they only render what agents emit and forward what the user says.
+- **Hermes-as-agent path is via OpenClaw routing.** Neither app talks to Hermes directly. The gateway routes the active conversation to a Hermes process (or any other compatible agent).
+- **MCP tools surface through the agent, not the apps.** Hermes supports MCP; OpenClaw exposes tools via the skill files. Neither the desktop nor the mobile app hosts MCP servers itself.
 
 ---
 
@@ -222,18 +258,22 @@ without UI changes.
 Tracked in `open-questions.md`. Highlights:
 
 - The exact WS message schema, Canvas surface schema, and voice transport for OpenClaw's "iOS/Android node" mode aren't documented in the README. We need to read the source (or ask).
-- CopilotKit's RN packages and OpenClaw's runtime contract may not match out of the box — we may need a tiny adapter.
-- Reaching a home gateway from cellular: no clean answer yet; v1 may require Tailscale or a relay.
-- Background WS on iOS is fragile; we'll need push as a "wake the app" signal for voice-call-style scenarios.
+- CopilotKit's RN packages and OpenClaw's runtime contract may not match out of the box — the desktop app may need to ship a small adapter.
+- Building two apps (mobile + Electron desktop) in tandem doubles the surface area. We mitigate by sharing a `@openclaw/protocol` TypeScript package between the two repos for message types and the gateway client.
+- Background WS on iOS is fragile; push (driven from the always-on Mac) is our wake-up signal for voice-call-style scenarios.
 
 ---
 
 ## 10. What "v1 done" looks like
 
-- Install the app, pair to your gateway, see your agents, pick Hermes (or an OpenClaw skill), have a streaming chat that works on iOS, Android, and Web from the same Expo build.
+- Install `openclaw-desktop` on a Mac mini; install `openclaw-mobile` on a phone; both find each other on the LAN; the user clicks "Approve" on the Mac to pair.
+- Mobile app shows the same agent list, threads, and Canvas surfaces as the desktop.
+- Streaming chat works on iOS, Android, and Web from the same Expo build, against Hermes or an OpenClaw skill.
 - One Canvas surface type renders correctly inline.
 - Push-to-talk voice round-trips through the gateway to the active agent and back.
-- Push notification when an agent pings you while the app is backgrounded.
+- Push notification (driven by the always-on Mac) when an agent pings while the app is backgrounded.
 - No crashes on the golden path; tests cover the gateway client and the pairing reducer.
 
-See `milestones.md` for sequencing and `compatibility.md` for the harness/agent matrix.
+See `milestones.md` for sequencing, `host-target.md` for Mac mini assumptions,
+`desktop-app.md` for the Electron companion, and `compatibility.md` for the
+harness/agent matrix.
