@@ -14,3 +14,7 @@ pnpm-lock.yaml
 # prebuild would just overwrite.
 apps/mobile/ios/
 apps/mobile/android/
+
+# Vendored third-party source (git submodules). Owned upstream; not
+# our place to reformat. See vendor/README.md.
+vendor/

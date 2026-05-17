@@ -57,14 +57,20 @@ When dispatching a plan to a sub-agent, pass:
 | P09B  | Desktop notarize + .dmg release       | desktop       | 1d     | `plans/P09B-desktop-release.md`               |
 | P09C  | Web deploy                            | mobile        | 0.5d   | `plans/P09C-web-deploy.md`                    |
 | P10.0 | OpenClaw upstream protocol survey     | root (doc)    | 1d     | `plans/P10.0-openclaw-source-survey.md`       |
-| P10A  | Real OpenClaw gateway bridge          | desktop       | 2–3d   | `plans/P10A-openclaw-bridge.md`               |
-| P10B  | Align `@openclaw/protocol` w/ upstream| protocol      | 0.5–2d | `plans/P10B-protocol-align-upstream.md`       |
-| P10C  | E2E against real `openclaw gateway`   | root          | 1d     | `plans/P10C-e2e-real-gateway.md`              |
-| P10D  | Upstream contributions (PRs)          | upstream      | open   | `plans/P10D-upstream-prs.md`                  |
+| P10A  | Real OpenClaw gateway bridge          | desktop       | 2–3d   | `plans/P10A-openclaw-bridge.md` — **RETIRED (chat-only bridge superseded by clawg-ui plugin; see P11A/P11D)** |
+| P10B  | Align `@openclaw/protocol` w/ upstream| protocol      | 0.5–2d | `plans/P10B-protocol-align-upstream.md` — **RETIRED (clawg-ui adapts server-side; envelope churn no longer needed)** |
+| P10C  | E2E against real `openclaw gateway`   | root          | 1d     | `plans/P10C-e2e-real-gateway.md` — **RETIRED → reframed as P11E (e2e against gateway + clawg-ui plugin)** |
+| P10D  | Upstream contributions (PRs)          | upstream      | open   | `plans/P10D-upstream-prs.md` — **RETIRED (most PR-back items obsolete; Canvas/Voice deferred to P11C)** |
+| P11.0 | clawg-ui pivot architecture summary   | root (doc)    | 0.25d  | `plans/P11.0-clawg-ui-pivot-summary.md`       |
+| P11A  | Adopt clawg-ui as real-mode chat path | mobile+desktop| 1–1.5d | `plans/P11A-adopt-clawg-ui-clients.md`        |
+| P11B  | clawg-ui pairing UX in the desktop    | desktop       | 1–1.5d | `plans/P11B-clawg-ui-pairing-ux.md`           |
+| P11C  | Canvas + Voice real-mode strategy     | root (doc)    | 0.5d   | `plans/P11C-canvas-voice-realmode-strategy.md`|
+| P11D  | Tear down P10A OpenClawBridge         | desktop       | 0.5d   | `plans/P11D-tear-down-openclaw-bridge.md`     |
+| P11E  | E2E against gateway + clawg-ui plugin | root          | 1–1.5d | `plans/P11E-e2e-clawg-ui.md`                  |
 
-**Total estimated effort:** ~25 person-days for Waves 1–13, plus 5–8 days for Wave 14 (P10.x). With 2 sub-agents running mobile and desktop in parallel: ~13–15 wall-clock days for Waves 1–13.
+**Total estimated effort:** ~25 person-days for Waves 1–13, plus 1d for P10.0 + ~5d for Wave 15 (P11.*). With 2 sub-agents running mobile and desktop in parallel: ~13–15 wall-clock days for Waves 1–13.
 
-**Current status (as of commit `1727cb4`):** Waves 1–12 complete. v0.1.0 dev preview tagged locally as `v0.1.0-dev-preview`. Wave 13 (release) deferred — needs Apple Developer + EAS + web host credentials. Wave 14 (upstream integration) starting next.
+**Current status (as of commit `2c10c8c`):** Waves 1–12 complete. v0.1.0 dev preview tagged locally as `v0.1.0-dev-preview`. Wave 13 (release) deferred — needs Apple Developer + EAS + web host credentials. P10.0 (upstream protocol survey) shipped. P10A (chat-only OpenClawBridge) shipped on `main` but **retired** as of Wave 15 — the `contextablemark/clawg-ui` gateway plugin (vendored at `vendor/clawg-ui/` @ `v0.7.0`) solves the chat translation problem server-side, so the bridge becomes legacy code (removed in P11D). Wave 15 (clawg-ui pivot) starting next.
 
 ---
 
@@ -121,6 +127,23 @@ When dispatching a plan to a sub-agent, pass:
               v1 chat+push working
 
        P09A · P09B · P09C  (release; after everything stabilizes)
+
+       P10.0 (done) ─► P10A (shipped, retired) ─► [P10B/P10C/P10D RETIRED]
+
+       P11.0 (pivot summary, doc)
+              │
+       ┌──────┴──────┬──────────────┐
+       ▼             ▼              ▼
+     P11A          P11B          P11C (doc-only)
+     (clients      (pairing
+      to clawg-ui) UX wrap)
+       │             │
+       └──────┬──────┘
+              ▼
+            P11D (tear down OpenClawBridge)
+              │
+              ▼
+            P11E (e2e against daemon + clawg-ui)
 ```
 
 ---
@@ -179,12 +202,20 @@ starting the next.
 - **P09B** — Desktop notarize / .dmg / auto-update.
 - **P09C** — Web deploy.
 
-### Wave 14 — Upstream OpenClaw integration (mostly sequential)
-- **P10.0** — OpenClaw source survey & spec (sequential, single agent). Documents the real upstream wire format and identifies deltas vs `@openclaw/protocol`.
-- **P10A** — Real OpenClaw gateway bridge (sequential, single agent). Replaces the in-process stub with supervision of the real `openclaw gateway` daemon. **Depends on P10.0**, and on P10B if non-trivial protocol changes are needed.
-- **P10B** — Protocol alignment (sequential, single agent). Updates `@openclaw/protocol` to match upstream where it diverges. **Depends on P10.0.** Can land before or with P10A.
-- **P10C** — End-to-end test against the real daemon (sequential, single agent). **Depends on P10A + P10B.**
-- **P10D** — Upstream contributions / PRs (open-ended, parallel-friendly). **Depends on P10.0** for the list. Doesn't block P10A/B/C.
+### Wave 14 — Upstream OpenClaw integration (mostly sequential) — partially shipped, mostly retired
+- **P10.0** — OpenClaw source survey & spec (sequential, single agent). Documents the real upstream wire format and identifies deltas vs `@openclaw/protocol`. **Shipped.**
+- **P10A** — Real OpenClaw gateway bridge (sequential, single agent). Replaces the in-process stub with supervision of the real `openclaw gateway` daemon. **Shipped (chat-only happy path, commit `8b2aeed`).** **Retired** by Wave 15: clawg-ui plugin does the same translation server-side; bridge removed in P11D.
+- **P10B** — Protocol alignment. **Retired** without execution: clawg-ui's `RunAgentInput`/AG-UI SSE shape is what our clients already speak; no envelope churn needed.
+- **P10C** — End-to-end test against the real daemon. **Retired** → reframed as P11E (e2e against `openclaw gateway` + `@contextableai/clawg-ui` plugin).
+- **P10D** — Upstream contributions / PRs. **Retired** without execution: the Canvas/Voice PR-back items are deferred to P11C's strategy doc; the CopilotKit-runtime-as-plugin item is effectively done by clawg-ui itself.
+
+### Wave 15 — clawg-ui pivot (mostly sequential after P11.0)
+- **P11.0** — Architecture pivot summary (sequential, doc only). Explains the decision to adopt `contextablemark/clawg-ui` for real-mode chat and what changes for clients vs. what stays. **Blocks** P11A/B/C/D/E (they reference it).
+- **P11A** — Adopt clawg-ui as real-mode chat path (sequential, single agent, mobile + desktop). Mobile + desktop AG-UI clients re-target `<host>:18789/v1/clawg-ui` when `gateway_mode === "clawg-ui"` (renamed from `"real"`). Marks P10A bridge `@deprecated` without removing it.
+- **P11B** — Desktop UI wrap for clawg-ui's pairing approval (parallel with P11A, coordinate on `settings.ts`). Spawns `openclaw pairing approve clawg-ui <code>` from a tray + Settings banner.
+- **P11C** — Canvas + Voice real-mode strategy (parallel with P11A/P11B, doc only). Recommends Option C for v1 (stub-only Canvas/Voice in real mode) with Option B (sibling plugins) as the phased post-v1 path.
+- **P11D** — Tear down the P10A `OpenClawBridge` (sequential after P11A). Deletes the 1149 LOC of bridge + handshake + tests; narrows `gateway_mode` to `"stub" | "clawg-ui"`.
+- **P11E** — E2E against real `openclaw gateway` + clawg-ui plugin (sequential after P11A + P11B + P11D). Docker-Compose'd daemon, scripted pair → approve → chat scenario, CI job `e2e-clawg-ui`.
 
 ---
 
