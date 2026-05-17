@@ -13,8 +13,9 @@ import type { ClawgUiPairingState } from '@openclaw/protocol';
 
 import { runClawgUiPairingApprove, type ApprovePairingResult, type SpawnFn } from './cli';
 import { existsSync } from 'node:fs';
+import type { ClawgUiIdentityHandle } from './identity';
 import { ClawgUiPairingStateMachine } from './pairing-state';
-import { CLAWG_UI_IPC } from '../../preload/ipc-channels';
+import { CLAWG_UI_IPC, type ClawgUiPairingNotifyPendingPayload } from '../../preload/ipc-channels';
 import {
   showClawgUiPairingNotification,
   type ClawgUiNotificationDecision,
@@ -44,6 +45,15 @@ export interface BuildControllerOptions {
    * WS server.
    */
   onStateChange?: (state: ClawgUiPairingState) => void;
+  /**
+   * Per-gateway identity store. Wired so the renderer's 403 sniffer can
+   * persist the bearer token + pairing code via the same path the
+   * desktop's own clawg-ui client uses (`postClawgUiRequest` →
+   * `identityStore.recordPairingPending`). Optional only so existing
+   * tests that don't exercise the IPC notify path don't have to provide
+   * one — production always wires it.
+   */
+  identityStore?: ClawgUiIdentityHandle;
 }
 
 /** Surface returned to `main/index.ts`. */
@@ -136,6 +146,51 @@ export function buildClawgUiPairingController(
     return true;
   });
 
+  // Renderer → main: the renderer's chat POST got a 403 pairing_pending
+  // (Fix 1 of the Wave 15 review block). We persist the token via the
+  // identity store keyed by `host:port` so the next retry already
+  // authenticates, then run the same notification + state-flip path the
+  // desktop's own clawg-ui client uses when it hits the same response.
+  opts.ipcMain.handle(
+    CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING,
+    async (_event, payload: ClawgUiPairingNotifyPendingPayload): Promise<boolean> => {
+      if (
+        !payload ||
+        typeof payload.pairingCode !== 'string' ||
+        typeof payload.token !== 'string' ||
+        typeof payload.host !== 'string' ||
+        typeof payload.port !== 'number'
+      ) {
+        // Reject malformed payloads silently — the renderer should never
+        // send these, but we don't crash the main process over it.
+        return false;
+      }
+      if (opts.identityStore) {
+        try {
+          await opts.identityStore.recordPairingPending({
+            host: payload.host,
+            port: payload.port,
+            // We don't have a deviceId from the renderer's sniffer — the
+            // token IS the identity from the plugin's perspective. Use the
+            // token itself as the deviceId so the persisted record stays
+            // valid; the desktop's own client uses the same fallback when
+            // the upstream UUID isn't decodable.
+            deviceId: payload.token,
+            deviceToken: payload.token,
+            pairingCode: payload.pairingCode,
+          });
+        } catch (err) {
+          // Identity store failures shouldn't block the notification
+          // path — the user can still approve from the banner.
+          // eslint-disable-next-line no-console
+          console.warn('[openclaw] failed to persist clawg-ui identity from renderer 403:', err);
+        }
+      }
+      notifyPending(payload.pairingCode);
+      return true;
+    },
+  );
+
   function notifyPending(pairingCode: string): void {
     state.setPending(pairingCode);
     void showClawgUiPairingNotification({
@@ -167,6 +222,7 @@ export function buildClawgUiPairingController(
       opts.ipcMain.removeHandler(CLAWG_UI_IPC.PAIRING_APPROVE);
       opts.ipcMain.removeHandler(CLAWG_UI_IPC.PAIRING_DENY);
       opts.ipcMain.removeHandler(CLAWG_UI_IPC.PAIRING_DISMISS);
+      opts.ipcMain.removeHandler(CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING);
     },
   };
 }

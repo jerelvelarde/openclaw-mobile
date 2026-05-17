@@ -182,6 +182,37 @@ describe('toPairingApproved', () => {
       runtimeUrl: 'http://x',
     });
   });
+
+  // Q46: when the desktop is in clawg-ui mode it advertises the daemon
+  // BASE URL alongside the runtime URL. Mobile must forward that as the
+  // `clawgUiBaseUrl` field on the protocol envelope so chat in
+  // `mode: 'clawg-ui'` has a destination.
+  it('forwards clawg_ui_base_url when the desktop advertises it', () => {
+    const fixed = 1_700_000_000_000;
+    const { approved } = toPairingApproved(
+      '482915',
+      {
+        status: 'approved',
+        token: 't',
+        runtime_url: 'http://x/copilot/runtime',
+        clawg_ui_base_url: 'http://192.168.1.42:18789',
+      },
+      5_000,
+      () => fixed,
+    );
+    expect(approved.clawgUiBaseUrl).toBe('http://192.168.1.42:18789');
+  });
+
+  it('omits clawgUiBaseUrl when the desktop did not advertise one', () => {
+    const fixed = 1_700_000_000_000;
+    const { approved } = toPairingApproved(
+      '482915',
+      { status: 'approved', token: 't', runtime_url: 'http://x' },
+      5_000,
+      () => fixed,
+    );
+    expect('clawgUiBaseUrl' in approved).toBe(false);
+  });
 });
 
 describe('resolveHttpBase', () => {

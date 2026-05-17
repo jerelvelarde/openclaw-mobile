@@ -24,6 +24,13 @@ export const PairingApprovedSchema = z.object({
   code: z.string().regex(/^\d{6}$/),
   token: TokenSchema,
   runtimeUrl: z.string().url(),
+  /**
+   * Optional clawg-ui daemon base URL (Q46). Optional in the Zod schema
+   * for back-compat with older desktop builds that don't send it; mobile
+   * still validates the rest of the envelope. When present it must look
+   * like an absolute `http(s)://host[:port]` URL.
+   */
+  clawgUiBaseUrl: z.string().url().optional(),
 });
 export type PairingApproved = z.infer<typeof PairingApprovedSchema>;
 

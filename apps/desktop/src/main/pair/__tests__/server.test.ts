@@ -157,6 +157,61 @@ describe('pairing server', () => {
     expect(h.server.approve('does-not-exist')).toBeNull();
   });
 
+  // Q46: in clawg-ui mode the main process passes `clawgUiBaseUrl` to
+  // `buildPairingServer` and the desktop must echo it back in
+  // /pair/status's approval payload so mobile can route real-mode chat
+  // at `<clawgUiBaseUrl>/v1/clawg-ui`. In stub mode (no option passed)
+  // the field is intentionally omitted — older mobile builds don't know
+  // how to interpret it.
+  it('echoes clawg_ui_base_url in /pair/status when desktop is in clawg-ui mode', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'openclaw-server-q46-'));
+    const signingKey = await loadOrCreateSigningKey(tmp, 'dev.openclaw.desktop.server-test-q46');
+    const deviceStore = new DeviceStore(tmp);
+    const server = buildPairingServer({
+      signingKey,
+      gatewayId: 'gw-q46',
+      deviceStore,
+      version: '0.0.0-test',
+      clawgUiBaseUrl: 'http://192.168.1.42:18789',
+    });
+    try {
+      const create = await server.fastify.inject({
+        method: 'POST',
+        url: '/pair/request',
+        payload: { device_name: 'Phone Q46', public_key: 'pk-q46' },
+      });
+      const { pair_id } = create.json() as { pair_id: string };
+      server.approve(pair_id);
+      const status = await server.fastify.inject({
+        method: 'GET',
+        url: `/pair/status?pair_id=${encodeURIComponent(pair_id)}`,
+      });
+      const body = status.json() as { clawg_ui_base_url?: string };
+      expect(body.clawg_ui_base_url).toBe('http://192.168.1.42:18789');
+    } finally {
+      await server.fastify.close();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('omits clawg_ui_base_url in /pair/status when not provided (stub mode)', async () => {
+    // Reuse the default harness — `buildHarness()` doesn't pass
+    // `clawgUiBaseUrl`, modelling stub mode.
+    const create = await h.server.fastify.inject({
+      method: 'POST',
+      url: '/pair/request',
+      payload: { device_name: 'Phone Stub', public_key: 'pk-stub' },
+    });
+    const { pair_id } = create.json() as { pair_id: string };
+    h.server.approve(pair_id);
+    const status = await h.server.fastify.inject({
+      method: 'GET',
+      url: `/pair/status?pair_id=${encodeURIComponent(pair_id)}`,
+    });
+    const body = status.json() as Record<string, unknown>;
+    expect('clawg_ui_base_url' in body).toBe(false);
+  });
+
   // P08B: /devices/:id/push-token route. After a phone pairs it POSTs
   // its Expo push token; the desktop persists it on the PairedDevice
   // record so the dispatcher can later look it up.

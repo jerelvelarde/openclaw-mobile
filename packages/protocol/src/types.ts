@@ -33,6 +33,20 @@ export interface PairingApproved {
   token: Token;
   /** URL the mobile app should hit for CopilotKit runtime calls. */
   runtimeUrl: string;
+  /**
+   * Optional base URL for the upstream `openclaw gateway` daemon when the
+   * desktop is running in `gateway_mode: "clawg-ui"` (P11A/P11B). When
+   * present, mobile chat in clawg-ui mode targets `<clawgUiBaseUrl>/v1/clawg-ui`
+   * (per `vendor/clawg-ui/README.md:39-77`) rather than the desktop's
+   * adapter. Defaults to `<httpBase host>:18789` (co-located deployment) but
+   * is persisted as a discrete value so split-topology users (desktop on
+   * laptop, daemon on home server) can override without rebuilding mobile.
+   *
+   * Optional for backward compatibility with older desktop builds that
+   * don't advertise it; mobile falls back to deriving it from `httpBase`
+   * when absent. Closes open question #46.
+   */
+  clawgUiBaseUrl?: string;
 }
 
 /**

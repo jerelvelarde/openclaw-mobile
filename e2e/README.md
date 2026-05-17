@@ -99,8 +99,9 @@ external dependencies (npm registry availability for `openclaw`).
 ## Known gaps
 
 - **`openclaw` npm publication.** The Dockerfile does
-  `RUN npm install -g openclaw`. This is the upstream-canonical install
-  path per `.chalk/openclaw-upstream.md` §1.1, but we haven't
+  `RUN npm install -g openclaw@${OPENCLAW_VERSION}` with
+  `OPENCLAW_VERSION=latest` by default. This is the upstream-canonical
+  install path per `.chalk/openclaw-upstream.md` §1.1, but we haven't
   independently verified that an `openclaw` package is published on the
   public npm registry under that name (the only confirmed reference is
   the peer-dep declaration in `vendor/clawg-ui/package.json`). If the
@@ -108,6 +109,27 @@ external dependencies (npm registry availability for `openclaw`).
   `https://github.com/openclaw/openclaw` inside the image, run
   `npm install && npm run build`, then `npm link` the resulting CLI
   before installing the plugin. Tracked as open question #48.
+
+### Bumping the `openclaw` pin
+
+The Dockerfile declares `ARG OPENCLAW_VERSION=latest` at the top.
+Bumping to a tagged release (once upstream publishes one) is a one-line
+edit:
+
+```diff
+- ARG OPENCLAW_VERSION=latest
++ ARG OPENCLAW_VERSION=0.42.0
+```
+
+You can also override per-build without editing the file:
+
+```sh
+docker compose -f e2e/docker/docker-compose.yml build \
+  --build-arg OPENCLAW_VERSION=0.42.0 gateway
+```
+
+After bumping, rerun `pnpm e2e:clawg-ui:local` and update the floor
+documented in `.chalk/open-questions.md` #48.
 
 - **Echo agent runtime.** `openclaw-config.json` declares the `main`
   agent with `kind: "echo"`. If the upstream gateway doesn't ship a

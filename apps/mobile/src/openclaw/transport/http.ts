@@ -38,6 +38,14 @@ export interface PairStatusApproved {
   status: 'approved';
   token: string;
   runtime_url: string;
+  /**
+   * Optional clawg-ui daemon base URL advertised by the desktop when it
+   * is running in `gateway_mode: "clawg-ui"` (P11A/P11B). Mobile persists
+   * this alongside `runtime_url` so chat in clawg-ui mode can target
+   * `<clawgUiBaseUrl>/v1/clawg-ui` (Q46). Omitted in stub mode and in
+   * older desktop builds — callers must handle the field being absent.
+   */
+  clawg_ui_base_url?: string;
 }
 /** Response shape from `GET /pair/status` if the user denies or it expires. */
 export interface PairStatusDenied {
@@ -132,7 +140,16 @@ export async function fetchPairStatus(
     if (typeof json.token !== 'string' || typeof json.runtime_url !== 'string') {
       throw new Error('Malformed approved /pair/status response');
     }
-    return { status: 'approved', token: json.token, runtime_url: json.runtime_url };
+    return {
+      status: 'approved',
+      token: json.token,
+      runtime_url: json.runtime_url,
+      // Only forward when present + string; older desktops omit the field
+      // entirely and stub-mode desktops omit it intentionally (Q46).
+      ...(typeof json['clawg_ui_base_url'] === 'string'
+        ? { clawg_ui_base_url: json['clawg_ui_base_url'] }
+        : {}),
+    };
   }
   if (json.status === 'denied') {
     return { status: 'denied', error: typeof json.error === 'string' ? json.error : undefined };
@@ -192,6 +209,10 @@ export function toPairingApproved(
     code,
     token,
     runtimeUrl: status.runtime_url,
+    // Forward the clawg-ui base URL if the desktop advertised one (Q46).
+    // Absent in stub mode + on pre-Wave-15 desktops; the optional field
+    // matches the Zod schema in @openclaw/protocol.
+    ...(status.clawg_ui_base_url !== undefined ? { clawgUiBaseUrl: status.clawg_ui_base_url } : {}),
   };
   return { token, approved };
 }

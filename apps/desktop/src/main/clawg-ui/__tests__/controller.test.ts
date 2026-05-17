@@ -61,7 +61,7 @@ function buildFakeIpcMain(): {
 }
 
 describe('buildClawgUiPairingController', () => {
-  it('registers the four IPC channels', () => {
+  it('registers the five IPC channels', () => {
     const ipc = buildFakeIpcMain();
     buildClawgUiPairingController({
       ipcMain: ipc.ipcMain,
@@ -73,6 +73,7 @@ describe('buildClawgUiPairingController', () => {
         CLAWG_UI_IPC.PAIRING_DENY,
         CLAWG_UI_IPC.PAIRING_DISMISS,
         CLAWG_UI_IPC.PAIRING_STATE_GET,
+        CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING,
       ].sort(),
     );
   });
@@ -162,6 +163,77 @@ describe('buildClawgUiPairingController', () => {
     controller.state.setApproved();
     const ok = (await ipc.invoke(CLAWG_UI_IPC.PAIRING_DISMISS)) as boolean;
     expect(ok).toBe(true);
+    expect(controller.state.state).toEqual({ status: 'idle' });
+  });
+
+  // Fix 1 (Wave 15): the renderer's 403 sniffer dispatches over the new
+  // CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING channel. The controller must
+  // (a) persist the bearer token in the identity store keyed by
+  // host:port so the next retry already authenticates, and (b) flip
+  // the state machine to `pending` so the Settings banner + tray entry
+  // fire from the same hook the desktop's own client uses.
+  it('notifyPending IPC: persists the token via identityStore + flips to pending', async () => {
+    const ipc = buildFakeIpcMain();
+    const recordPairingPending = vi.fn(async () => ({
+      host: 'gw',
+      port: 18789,
+      deviceId: 'tok.sig',
+      deviceToken: 'tok.sig',
+      pairingCode: 'ABCD1234',
+    }));
+    const identityStore = {
+      read: vi.fn(async () => null),
+      upsert: vi.fn(),
+      recordPairingPending,
+      markApproved: vi.fn(async () => undefined),
+      remove: vi.fn(async () => undefined),
+      list: vi.fn(async () => []),
+    };
+    const onStateChange = vi.fn();
+    const controller = buildClawgUiPairingController({
+      ipcMain: ipc.ipcMain,
+      getWindow: () => null,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      identityStore: identityStore as any,
+      onStateChange,
+    });
+    const ok = (await ipc.invoke(CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING, {
+      pairingCode: 'ABCD1234',
+      token: 'tok.sig',
+      host: 'gw',
+      port: 18789,
+    })) as boolean;
+    expect(ok).toBe(true);
+    expect(recordPairingPending).toHaveBeenCalledWith({
+      host: 'gw',
+      port: 18789,
+      deviceId: 'tok.sig',
+      deviceToken: 'tok.sig',
+      pairingCode: 'ABCD1234',
+    });
+    expect(controller.state.state).toEqual({
+      status: 'pending',
+      pairingCode: 'ABCD1234',
+    });
+    expect(onStateChange).toHaveBeenCalledWith({
+      status: 'pending',
+      pairingCode: 'ABCD1234',
+    });
+  });
+
+  it('notifyPending IPC: rejects malformed payloads silently', async () => {
+    const ipc = buildFakeIpcMain();
+    const controller = buildClawgUiPairingController({
+      ipcMain: ipc.ipcMain,
+      getWindow: () => null,
+    });
+    const ok = (await ipc.invoke(CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING, {
+      pairingCode: 'A',
+      // missing token
+      host: 'gw',
+      port: 18789,
+    })) as boolean;
+    expect(ok).toBe(false);
     expect(controller.state.state).toEqual({ status: 'idle' });
   });
 
