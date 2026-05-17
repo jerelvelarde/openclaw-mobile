@@ -1,0 +1,15 @@
+# electron-builder configuration stub.
+#
+# P02B intentionally does not wire real code-signing or notarization. The
+# release pipeline (P09B) owns the Apple Developer identity, notary
+# credentials, auto-update channel, and the rest of the packaging story.
+# Until then this file just declares the app's identity so `electron-vite
+# build` has something to chew on.
+appId: dev.openclaw.desktop
+productName: OpenClaw
+mac:
+  target: dmg
+  # TODO P09B: replace `null` with the team's signing identity, wire
+  # notarization (notarytool), and choose an auto-update channel
+  # (electron-updater on GitHub Releases per `.chalk/open-questions.md` B.20).
+  identity: null

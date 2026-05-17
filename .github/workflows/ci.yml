@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  quality:
+    name: Quality (format, typecheck, lint, test, protocol build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          # Version is read from root package.json `packageManager`.
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build @openclaw/protocol
+        # Must run before typecheck: apps/desktop's TS imports resolve via the
+        # package's `types` field (dist/index.d.ts), which only exists post-build.
+        # apps/mobile uses tsconfig paths pointing at src so it doesn't need this,
+        # but unifying ordering is simpler than per-app workarounds.
+        run: pnpm --filter @openclaw/protocol build
+
+      - name: Prettier (format:check)
+        run: pnpm format:check
+
+      - name: TypeScript (typecheck across workspaces)
+        run: pnpm -r typecheck
+
+      - name: ESLint (lint across workspaces)
+        run: pnpm -r lint
+
+      - name: Tests (across workspaces)
+        run: pnpm -r test

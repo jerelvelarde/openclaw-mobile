@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared wire types, Zod schemas, GatewayClient interface, and in-memory mock gateway for openclaw-mobile and openclaw-desktop.",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "echo '[protocol] lint stub — real config lands in P01A' && exit 0",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.6"
+  }
+}
