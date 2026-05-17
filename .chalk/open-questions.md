@@ -194,6 +194,11 @@ The plan now spans **two apps** (mobile in this repo, Electron desktop in
     - For v1 we vendor `contextablemark/clawg-ui` as a git submodule at `vendor/clawg-ui/` pinned to `v0.7.0`. No fork yet (user explicitly chose vendoring). We fork when: (a) we need to patch clawg-ui in a way upstream won't accept on a reasonable timeline; (b) we need to pin a non-tag commit while waiting for the next release; (c) we author Canvas/Voice extensions inside clawg-ui per Option A of question #44.
     - **Action:** keep as vendor for now. When any of (a)/(b)/(c) trips, fork to `openclaw-mobile/clawg-ui`, update `.gitmodules` URL, and pin the patched commit. The one-line submodule URL change makes the migration cheap. Track via a tag in any PR that bumps the pin: `vendor:bump` or `vendor:fork`.
 
+46. **clawg-ui operator-auth route as a per-device-pairing bypass** `[desktop]` — surfaced by P11B.
+    - clawg-ui exposes a second AG-UI route at `/v1/clawg-ui/operator` (`vendor/clawg-ui/src/http-handler.ts:362-395`) that skips the device-pairing handshake entirely when the caller already holds an OpenClaw gateway operator token. Comment on the route makes the intent explicit: it's for "operator-UI-embedded consumers (plugin-contributed UI slots) that already hold an OpenClaw gateway token via `ExtensionTabContext`".
+    - The desktop in v1 doesn't issue or hold an operator token by default — it talks to an `openclaw gateway` daemon as an outside client, so it has to go through device-pairing the same way mobile does. There's no useful shortcut here for v1.
+    - **Action (future):** if/when the desktop also runs an operator-console-style surface inside the renderer (or we add an `OPENCLAW_OPERATOR_TOKEN` env-driven config path for power users), revisit using `/v1/clawg-ui/operator` to skip the per-device pairing dance for the desktop's own runtime client. Mobile still needs the device-pairing flow because phones don't hold an operator token.
+
 ---
 
 ## B. Decisions we can make as we go

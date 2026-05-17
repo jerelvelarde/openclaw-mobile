@@ -86,3 +86,32 @@ export type ThreadEvent = z.infer<typeof ThreadEventSchema>;
 // of P06.0. `VoiceOptsSchema` (and the rest of the voice schemas) live in
 // `./voice/schemas.ts` as of P07.0. Both are re-exported from `./index.ts`
 // so consumers see the same import path they did before.
+
+// ── clawg-ui pairing (P11B) ─────────────────────────────────────────────────
+
+/**
+ * Runtime schema for `ClawgUiPairingState`. The desktop main process
+ * emits these transitions when wrapping clawg-ui's pairing-pending 403;
+ * mobile validates inbound broadcasts so a malformed payload from a
+ * mismatched-version desktop doesn't crash the renderer.
+ *
+ * The `pairingCode` literal regex is intentionally narrow — clawg-ui
+ * issues short `[A-Z0-9]{4,16}` codes (`vendor/clawg-ui/README.md:265`)
+ * but we tolerate any short non-empty alphanumeric so a future code
+ * format change upstream doesn't immediately bork the mobile parser.
+ */
+export const ClawgUiPairingStateSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('idle') }),
+  z.object({
+    status: z.literal('pending'),
+    pairingCode: z
+      .string()
+      .min(1)
+      .max(32)
+      .regex(/^[A-Za-z0-9-]+$/),
+  }),
+  z.object({ status: z.literal('approved') }),
+  z.object({ status: z.literal('denied'), reason: z.string().optional() }),
+  z.object({ status: z.literal('error'), message: z.string() }),
+]);
+export type ClawgUiPairingState = z.infer<typeof ClawgUiPairingStateSchema>;

@@ -107,3 +107,33 @@ export type ThreadEvent =
 // `VoiceOpts` + `VoiceSession` live in `./voice/types.ts` as of P07.0.
 // Both are re-exported from `./index.ts` so consumers see the same import
 // path they did before.
+
+// ── clawg-ui pairing (P11B) ─────────────────────────────────────────────────
+
+/**
+ * State of the desktop's wrap of `clawg-ui`'s device-pairing flow
+ * (`vendor/clawg-ui/README.md` §"Authentication"). When the desktop's
+ * runtime client POSTs to `/v1/clawg-ui` without auth, the gateway plugin
+ * returns a `403 pairing_pending` carrying a `pairingCode` + a `token`.
+ * The desktop surfaces the code in a tray/Settings banner; the user
+ * clicks Approve, which shells out to
+ * `openclaw pairing approve clawg-ui <pairingCode>` on the gateway host.
+ *
+ * Mobile observes the state via the existing pairing channel so the
+ * "(pairing)/awaiting-gateway" intermediate screen can show the same
+ * code the desktop is asking the user to approve.
+ *
+ * This is the *second* trust layer the desktop manages on the user's
+ * behalf (the first being our own Ed25519 6-digit pairing in P03B). The
+ * two are deliberately decoupled — `"stub"` gateway mode never produces
+ * a `ClawgUiPairingState` event.
+ */
+export type ClawgUiPairingState =
+  | { status: 'idle' }
+  | { status: 'pending'; pairingCode: string }
+  | { status: 'approved' }
+  | { status: 'denied'; reason?: string }
+  | { status: 'error'; message: string };
+
+/** Topic name used to broadcast `ClawgUiPairingState` changes to peers. */
+export const CLAWG_UI_PAIRING_STATE_TOPIC = 'system:clawg-ui-pairing-state' as const;

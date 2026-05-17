@@ -51,11 +51,22 @@ describe('SettingsStore', () => {
     expect(store.read().gateway_mode).toBe('stub');
   });
 
-  it('persists a gateway_mode update to "real"', () => {
+  it('persists a gateway_mode update to "clawg-ui"', () => {
     const store = new SettingsStore(tmp);
-    const updated = store.update({ gateway_mode: 'real' });
-    expect(updated.gateway_mode).toBe('real');
-    expect(new SettingsStore(tmp).read().gateway_mode).toBe('real');
+    const updated = store.update({ gateway_mode: 'clawg-ui' });
+    expect(updated.gateway_mode).toBe('clawg-ui');
+    expect(new SettingsStore(tmp).read().gateway_mode).toBe('clawg-ui');
+  });
+
+  it('coerces the legacy "real" value to "clawg-ui" (Wave 15 migration)', () => {
+    // Files written by P10A used `gateway_mode: "real"`. Wave 15
+    // (P11A/P11B) renames that to `"clawg-ui"` to reflect the actual
+    // transport. Existing users shouldn't have to hand-edit their
+    // settings.json to keep the same behaviour.
+    const path = join(tmp, 'settings.json');
+    writeFileSync(path, JSON.stringify({ version: 1, gateway_mode: 'real' }));
+    const store = new SettingsStore(tmp);
+    expect(store.read().gateway_mode).toBe('clawg-ui');
   });
 
   it('coerces unknown gateway_mode values back to the default', () => {

@@ -17,12 +17,21 @@ import { dirname, join } from 'node:path';
 /**
  * Mode selector for the desktop's gateway plumbing. Flipping this requires
  * an app restart — there's no live-swap. Default is `"stub"` so existing
- * chat/canvas/voice paths keep working. `"real"` switches to the
- * `OpenClawBridge` (P10A) which talks to a real `openclaw gateway` daemon
- * over WebSocket; canvas/voice/setActiveAgent return a typed
- * `unsupportedInRealMode` error in that mode until follow-up plans land.
+ * chat/canvas/voice paths keep working.
+ *
+ * - `"stub"` — in-process echo gateway + our P03B 6-digit pairing (full
+ *   chat/canvas/voice surfaces).
+ * - `"clawg-ui"` — Wave 15 pivot (P11A/P11B). The runtime points at the
+ *   `clawg-ui` gateway plugin's `/v1/clawg-ui` SSE endpoint; pairing
+ *   flows via the plugin's `403 pairing_pending` → CLI approve handshake
+ *   wrapped in the desktop's tray + Settings banner. Canvas + Voice
+ *   surfaces are not yet bridged in this mode (see P11C).
+ *
+ * The legacy value `"real"` from P10A is accepted for back-compat at
+ * read time but normalised to `"clawg-ui"` so a user mid-upgrade doesn't
+ * have to hand-edit `settings.json`.
  */
-export type GatewayMode = 'stub' | 'real';
+export type GatewayMode = 'stub' | 'clawg-ui';
 
 /** Shape of the persisted JSON object. */
 export interface SettingsFile {
@@ -48,7 +57,13 @@ export const DEFAULT_SETTINGS: SettingsFile = {
 };
 
 function coerceGatewayMode(v: unknown): GatewayMode {
-  return v === 'real' ? 'real' : DEFAULT_SETTINGS.gateway_mode;
+  if (v === 'clawg-ui') return 'clawg-ui';
+  // Migration: the Wave 14 default for the real-gateway bridge was
+  // `"real"`. Wave 15 (P11A) renames that value to `"clawg-ui"` to
+  // reflect the new transport. Normalize older `settings.json` files so
+  // a user upgrading mid-flight doesn't lose their preference.
+  if (v === 'real') return 'clawg-ui';
+  return DEFAULT_SETTINGS.gateway_mode;
 }
 
 function read(filePath: string): SettingsFile {

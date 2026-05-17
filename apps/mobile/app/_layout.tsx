@@ -26,6 +26,7 @@ import { Redirect, Slot, Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect, useMemo } from 'react';
 import { Platform, SafeAreaView, StyleSheet, View } from 'react-native';
 
+import { ClawgUiPairingProvider } from '../src/clawgUi/ClawgUiPairingProvider';
 import { ReconnectBanner } from '../src/components/ReconnectBanner';
 import { CopilotKitProvider } from '../src/copilot/CopilotKitProvider';
 import { resolveRuntimeUrl } from '../src/copilot/runtimeUrl';
@@ -154,7 +155,9 @@ const styles = StyleSheet.create({
 export default function RootLayout() {
   return (
     <PairingProvider>
-      <Gate />
+      <ClawgUiPairingProvider>
+        <Gate />
+      </ClawgUiPairingProvider>
     </PairingProvider>
   );
 }

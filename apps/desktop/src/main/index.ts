@@ -21,6 +21,10 @@ import { join } from 'node:path';
 // the main process. The real wiring lands in P04B (transport). Reference it
 // as a type so tree-shaking drops it at runtime.
 import type { Agent } from '@openclaw/protocol';
+import {
+  buildClawgUiPairingController,
+  type ClawgUiPairingController,
+} from './clawg-ui/controller';
 import { buildPairingController, PairingController } from './pair/controller';
 import { openKeystore } from './pair/keystore';
 import { buildRuntimeUrl, DEFAULT_PORT } from './pair/server';
@@ -57,6 +61,7 @@ let lanEnabled = true;
 let selfToken: SelfToken | null = null;
 let pushClient: PushClient | null = null;
 let pushDispatcher: PushDispatcher | null = null;
+let clawgUiPairing: ClawgUiPairingController | null = null;
 
 // Keep the placeholder import live for typecheck without polluting runtime.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -115,7 +120,24 @@ function showWindowOnRoute(route: string): void {
 function buildTrayMenu(): Electron.Menu {
   const lanLabel = `LAN: ${lanEnabled ? 'enabled' : 'disabled'}`;
   const bonjourLabel = `Bonjour: ${bonjour?.state === 'advertising' ? 'advertising' : 'idle'}`;
+  // Show a "Pending pairing: <code>" entry when the clawg-ui state
+  // machine is in `pending`. Clicking it focuses Settings so the user
+  // can act on the in-window banner. We surface it at the top of the
+  // menu (above the navigation entries) so it's the first thing the
+  // user sees when they click the tray icon during an active request.
+  const clawgUiState = clawgUiPairing?.state.state;
+  const clawgUiHeader: Electron.MenuItemConstructorOptions[] =
+    clawgUiState?.status === 'pending'
+      ? [
+          {
+            label: `Pending pairing: ${clawgUiState.pairingCode}`,
+            click: () => showWindowOnRoute('/settings'),
+          },
+          { type: 'separator' },
+        ]
+      : [];
   return Menu.buildFromTemplate([
+    ...clawgUiHeader,
     { label: 'Show', click: () => showWindowOnRoute('/chat') },
     { label: 'Chat', click: () => showWindowOnRoute('/chat') },
     { label: 'Agents…', click: () => showWindowOnRoute('/agents') },
@@ -204,7 +226,12 @@ async function bootPairing(): Promise<void> {
   // (`OpenClawBridge` — P10A) that proxies to an installed
   // `openclaw gateway` daemon. The flip is restart-only; see Settings.
   router = createRouter();
-  if (cfg.gateway_mode === 'real') {
+  if (cfg.gateway_mode === 'clawg-ui') {
+    // Wave 15 pivot: in `"clawg-ui"` mode the desktop's runtime URL
+    // points at the clawg-ui gateway plugin's `/v1/clawg-ui` SSE
+    // endpoint (wired by P11A). The legacy P10A `OpenClawBridge`
+    // remains attached for now so chat continues to flow through the
+    // WS router until P11D retires it — see the Wave 15 plans.
     try {
       const bridgeKeystore = await openKeystore(app.getPath('userData'));
       openClawBridge = await attachOpenClawBridge({
@@ -217,7 +244,7 @@ async function bootPairing(): Promise<void> {
       // Don't crash the app — fall back to the stub so chat keeps working
       // and the user can see something's wrong via the Settings UI.
       // eslint-disable-next-line no-console
-      console.error('[openclaw] real-gateway bridge failed to attach; using stub:', err);
+      console.error('[openclaw] clawg-ui-mode bridge failed to attach; using stub:', err);
       openClawBridge = null;
       stubGateway = attachStubGateway(router);
     }
@@ -298,6 +325,24 @@ async function bootPairing(): Promise<void> {
     pushClient,
   });
 
+  // ---- clawg-ui pairing controller (P11B) -------------------------------
+  // Only mount in `"clawg-ui"` mode: legacy `"stub"` mode uses our P03B
+  // 6-digit pairing flow and never produces a clawg-ui pairing_pending
+  // 403. The controller registers IPC handlers + a notification path
+  // when the bound runtime client (P11A) calls `notifyPending`.
+  if (cfg.gateway_mode === 'clawg-ui') {
+    clawgUiPairing = buildClawgUiPairingController({
+      ipcMain,
+      getWindow: getMainWindow,
+      Notification: IS_MAC ? Notification : undefined,
+      onStateChange: () => {
+        // Refresh the tray menu so the "Pending pairing: ABCD1234"
+        // entry appears/disappears as transitions land.
+        refreshTrayMenu();
+      },
+    });
+  }
+
   // ---- Bonjour ----------------------------------------------------------
   if (lanEnabled) {
     bonjour = createBonjourPublisher({
@@ -318,6 +363,12 @@ async function bootPairing(): Promise<void> {
 }
 
 async function teardownTransport(): Promise<void> {
+  try {
+    clawgUiPairing?.close();
+  } catch {
+    // ignore
+  }
+  clawgUiPairing = null;
   try {
     pushDispatcher?.detach();
   } catch {
