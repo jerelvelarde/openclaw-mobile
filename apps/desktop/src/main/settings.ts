@@ -22,9 +22,11 @@ import { dirname, join } from 'node:path';
  * `"clawg-ui"` (P11A) routes real-mode chat through the user's running
  * `openclaw gateway` daemon at `POST <host>:18789/v1/clawg-ui` — the
  * AG-UI/SSE endpoint exposed by the `@contextableai/clawg-ui` plugin
- * pinned at `vendor/clawg-ui/`. Canvas / voice / `setActiveAgent` return
- * a typed `unsupportedInRealMode` error in that mode until follow-up
- * plans (P11C) land.
+ * pinned at `vendor/clawg-ui/`. Pairing flows via the plugin's
+ * `403 pairing_pending` → `openclaw pairing approve clawg-ui <code>` CLI
+ * handshake wrapped by the desktop's tray + Settings banner (P11B).
+ * Canvas / voice / `setActiveAgent` return a typed `unsupportedInRealMode`
+ * error in that mode until follow-up plans (P11C) land.
  *
  * Legacy persisted values of `"real"` migrate forward to `"clawg-ui"`
  * on read; see {@link coerceGatewayMode}. The legacy WebSocket

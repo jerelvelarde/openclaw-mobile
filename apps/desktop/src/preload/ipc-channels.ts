@@ -33,6 +33,31 @@ export const IPC = {
   SYSTEM_GET_SELF_TOKEN: 'system:get-self-token',
 } as const;
 
+/**
+ * Channel names for the clawg-ui pairing flow (P11B). Lives in a
+ * separate namespace from `IPC` so a future P03B / P11B coexistence bug
+ * can't accidentally cross-fire — e.g. the legacy `PAIRING_APPROVE`
+ * channel takes a `pair_id`, the clawg-ui `PAIRING_APPROVE` takes a
+ * `pairingCode`.
+ */
+export const CLAWG_UI_IPC = {
+  /** Renderer → main: read the current `ClawgUiPairingState`. */
+  PAIRING_STATE_GET: 'clawg-ui:pairing:state:get',
+  /** Renderer → main: approve a pending pairing by code (spawns CLI). */
+  PAIRING_APPROVE: 'clawg-ui:pairing:approve',
+  /** Renderer → main: deny a pending pairing (local dismissal only). */
+  PAIRING_DENY: 'clawg-ui:pairing:deny',
+  /** Renderer → main: reset the state machine to `idle`. */
+  PAIRING_DISMISS: 'clawg-ui:pairing:dismiss',
+  /** Main → renderer: state machine transition. */
+  PAIRING_STATE_EVENT: 'clawg-ui:pairing:state-event',
+  /**
+   * Main → renderer: tray notification fallback asked us to show the
+   * Settings page so the user can approve from the in-window banner.
+   */
+  NAVIGATE_TO_SETTINGS: 'clawg-ui:navigate-settings',
+} as const;
+
 /** Payload sent over `PAIRING_PENDING_EVENT` and returned by `PAIRING_LIST_PENDING`. */
 export interface PendingPairView {
   pair_id: string;
@@ -59,12 +84,11 @@ export interface SettingsView {
   lan_enabled: boolean;
   /**
    * Which gateway plumbing the desktop boots. `"stub"` keeps the legacy
-   * in-process echo gateway; `"clawg-ui"` (P11A) routes real-mode chat
-   * through the user's running `openclaw gateway` daemon at
-   * `POST <host>:18789/v1/clawg-ui` (the AG-UI/SSE endpoint exposed by
-   * the `@contextableai/clawg-ui` plugin pinned at `vendor/clawg-ui/`).
-   * Restart-only. Legacy persisted `"real"` values migrate to
-   * `"clawg-ui"` on read (see `main/settings.ts#coerceGatewayMode`).
+   * in-process echo gateway; `"clawg-ui"` (Wave 15 — P11A/P11B) points
+   * the runtime at the clawg-ui gateway plugin's `/v1/clawg-ui`
+   * endpoint and runs the desktop-wrapped pairing flow. Restart-only.
+   * Legacy persisted `"real"` values migrate to `"clawg-ui"` on read
+   * (see `main/settings.ts#coerceGatewayMode`).
    */
   gateway_mode: 'stub' | 'clawg-ui';
 }
