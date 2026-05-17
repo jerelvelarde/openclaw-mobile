@@ -38,6 +38,13 @@ export interface BuildControllerOptions {
    * `undefined` to use `RUNTIME_URL_PLACEHOLDER`.
    */
   runtimeUrl?: string;
+  /**
+   * Optional clawg-ui daemon base URL to echo to mobile in the approval
+   * payload. Only set when the desktop is running in
+   * `gateway_mode: "clawg-ui"`. Closes Q46 (mobile-side clawg-ui base
+   * URL discovery).
+   */
+  clawgUiBaseUrl?: string;
 }
 
 function toPendingView(pair: PendingPair): PendingPairView {
@@ -70,6 +77,7 @@ export async function buildPairingController(
     deviceStore,
     version: opts.version,
     runtimeUrl: opts.runtimeUrl,
+    ...(opts.clawgUiBaseUrl !== undefined ? { clawgUiBaseUrl: opts.clawgUiBaseUrl } : {}),
     onPendingPair: (pair) => {
       const view = toPendingView(pair);
       // 1. Push the event to the renderer so an open modal updates.

@@ -39,6 +39,13 @@ export interface PersistedSession {
   runtimeUrl?: string;
   /** HTTP base (host:port) the phone paired against — used as fallback. */
   httpBase?: string;
+  /**
+   * Optional clawg-ui daemon base URL the desktop advertised at pairing
+   * time (Q46). Persisted so chat in `mode: 'clawg-ui'` survives app
+   * restarts without re-pairing. Absent for stub-mode desktops and pre-
+   * Wave-15 sessions.
+   */
+  clawgUiBaseUrl?: string;
 }
 
 /** Cheap runtime guard — `SecureStore`/`localStorage` both return strings. */
@@ -74,6 +81,7 @@ function parseSession(raw: string | null): PersistedSession | null {
     };
     if (typeof parsed.runtimeUrl === 'string') out.runtimeUrl = parsed.runtimeUrl;
     if (typeof parsed.httpBase === 'string') out.httpBase = parsed.httpBase;
+    if (typeof parsed.clawgUiBaseUrl === 'string') out.clawgUiBaseUrl = parsed.clawgUiBaseUrl;
     return out;
   } catch {
     return null;
@@ -144,6 +152,9 @@ export async function savePairingSession(session: PersistedSession): Promise<voi
     token: { value: session.token.value, expiresAt: session.token.expiresAt },
     runtimeUrl: session.runtimeUrl,
     httpBase: session.httpBase,
+    // Persist when present so a desktop running in clawg-ui mode (Q46)
+    // can hand mobile a daemon address it remembers across launches.
+    clawgUiBaseUrl: session.clawgUiBaseUrl,
   });
   await writeItem(PAIRING_SESSION_KEY, serialized);
   await savePairingToken(session.token);

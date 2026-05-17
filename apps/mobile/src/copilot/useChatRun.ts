@@ -129,6 +129,9 @@ export function useChatRun(threadId: string): UseChatRun {
           runtimeUrl: ctx.runtimeUrl,
           agentId: ctx.activeAgent,
           token: ctx.token,
+          // Q46: forward the wire mode so clawg-ui sessions hit
+          // `<baseUrl>/v1/clawg-ui` instead of the desktop adapter URL.
+          mode: ctx.mode,
           input,
           handlers: {
             onMessageStart: (msg) => {

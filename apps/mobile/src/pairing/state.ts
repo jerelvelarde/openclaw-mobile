@@ -48,6 +48,13 @@ export interface PairingState {
   runtimeUrl?: string;
   /** HTTP base the phone paired against — used as runtime-URL fallback. */
   httpBase?: string;
+  /**
+   * Optional clawg-ui daemon base URL the desktop advertised in the
+   * pairing payload (Q46). Persisted across launches so chat in
+   * `mode: 'clawg-ui'` can target `<clawgUiBaseUrl>/v1/clawg-ui` without
+   * re-pairing. Absent in stub mode + on pre-Wave-15 desktops.
+   */
+  clawgUiBaseUrl?: string;
   /** Human-readable error for the `error` state. */
   error?: string;
 }
@@ -75,6 +82,7 @@ export type PairingEvent =
       token: Token;
       runtimeUrl?: string;
       httpBase?: string;
+      clawgUiBaseUrl?: string;
     };
 
 /** Starting state when the provider first mounts (before token load). */
@@ -125,6 +133,10 @@ export function pairingReducer(state: PairingState, event: PairingEvent): Pairin
         code: state.code,
         runtimeUrl: event.approved.runtimeUrl,
         ...(event.httpBase ? { httpBase: event.httpBase } : {}),
+        // Q46: surface the clawg-ui base URL on `paired` state so
+        // consumers (CopilotKit runtime resolution) can route real-mode
+        // chat without a second store lookup.
+        ...(event.approved.clawgUiBaseUrl ? { clawgUiBaseUrl: event.approved.clawgUiBaseUrl } : {}),
       };
 
     case 'FAILED':
@@ -144,6 +156,9 @@ export function pairingReducer(state: PairingState, event: PairingEvent): Pairin
         token: event.token,
         ...(event.runtimeUrl ? { runtimeUrl: event.runtimeUrl } : {}),
         ...(event.httpBase ? { httpBase: event.httpBase } : {}),
+        // Q46: persist the clawg-ui base URL across launches so chat in
+        // real mode doesn't need a re-pair to recover the daemon address.
+        ...(event.clawgUiBaseUrl ? { clawgUiBaseUrl: event.clawgUiBaseUrl } : {}),
       };
 
     default: {

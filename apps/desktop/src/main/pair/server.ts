@@ -66,6 +66,15 @@ export interface PendingPair {
   token?: string;
   /** Populated only once `status === 'approved'` — see RUNTIME_URL_PLACEHOLDER. */
   runtime_url?: string;
+  /**
+   * Populated only once `status === 'approved'` AND the desktop is running
+   * in `gateway_mode: "clawg-ui"`. The mobile pairing reducer persists
+   * this alongside `runtime_url` / `httpBase` and threads it through to
+   * `resolveRuntimeRequest({ mode: 'clawg-ui', clawgUiBaseUrl })` so mobile
+   * chat in clawg-ui mode actually has a destination (Q46). Omitted in
+   * stub mode so older mobile builds keep working unchanged.
+   */
+  clawg_ui_base_url?: string;
   /** Populated only once approved — assigned at approve time. */
   device_id?: string;
 }
@@ -181,6 +190,14 @@ export interface BuildServerOptions {
    * the existing tests keep working without wiring host detection.
    */
   runtimeUrl?: string;
+  /**
+   * Optional clawg-ui daemon base URL the desktop advertises to mobile
+   * at pairing time when running in `gateway_mode: "clawg-ui"`. The main
+   * process passes `http://<gatewayHost>:<gatewayPort>` (matching the
+   * values used by the desktop's own clawg-ui client). Omitted in stub
+   * mode and in tests that don't exercise the clawg-ui path. Closes Q46.
+   */
+  clawgUiBaseUrl?: string;
 }
 
 /** Bundle returned from `buildPairingServer` for the main process to manage. */
@@ -207,6 +224,7 @@ export function buildPairingServer(opts: BuildServerOptions): PairingServer {
   const pairTtlMs = opts.pairTtlMs ?? DEFAULT_PAIR_TTL_MS;
   const tokenTtlMs = opts.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
   const runtimeUrl = opts.runtimeUrl ?? RUNTIME_URL_PLACEHOLDER;
+  const clawgUiBaseUrl = opts.clawgUiBaseUrl;
 
   const fastify = Fastify({ logger: false });
 
@@ -265,6 +283,12 @@ export function buildPairingServer(opts: BuildServerOptions): PairingServer {
         status: 'approved' as const,
         token: pair.token,
         runtime_url: pair.runtime_url,
+        // Only echoed when the desktop is running in clawg-ui mode.
+        // Omitted under stub mode so the field never leaks to mobile
+        // builds that don't know how to interpret it (Q46).
+        ...(pair.clawg_ui_base_url !== undefined
+          ? { clawg_ui_base_url: pair.clawg_ui_base_url }
+          : {}),
       };
     }
     if (pair.status === 'denied') {
@@ -334,6 +358,9 @@ export function buildPairingServer(opts: BuildServerOptions): PairingServer {
     pair.status = 'approved';
     pair.token = token;
     pair.runtime_url = runtimeUrl;
+    if (clawgUiBaseUrl !== undefined) {
+      pair.clawg_ui_base_url = clawgUiBaseUrl;
+    }
     pair.device_id = deviceId;
     opts.deviceStore.addDevice({
       device_id: deviceId,

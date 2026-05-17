@@ -28,7 +28,19 @@
 # e2e/docker/Dockerfile.openclaw-gateway .` from the repo root.
 
 ARG NODE_VERSION=22.16
+# Pinned version of the `openclaw` npm package installed inside the
+# image. The upstream README (`.chalk/openclaw-upstream.md` §1.1) cites
+# the CLI as the `openclaw` binary launched from `dist/index.js` but
+# does NOT declare a stable tag we can pin against today — clawg-ui's
+# peer dep declares `"openclaw": "*"` (`vendor/clawg-ui/package.json:35`).
+# We default to `latest` so the nightly E2E picks up whatever is
+# currently published; bumping to a specific version once upstream tags
+# a release is a one-line change here. See `e2e/README.md` "Bumping the
+# openclaw pin" for the workflow.
+ARG OPENCLAW_VERSION=latest
 FROM node:${NODE_VERSION}-bookworm-slim AS builder
+
+ARG OPENCLAW_VERSION
 
 # We need `curl` for the healthcheck (the slim image omits it) and
 # `git` because the vendored clawg-ui's npm-pack step touches a
@@ -40,12 +52,17 @@ RUN apt-get update \
 # ---- Install openclaw gateway --------------------------------------------
 # `openclaw` is the upstream npm package name (peer-dep'd by
 # `vendor/clawg-ui/package.json:35`). The CLI binary it installs is
-# `openclaw` per `.chalk/openclaw-upstream.md` §1.1.
+# `openclaw` per `.chalk/openclaw-upstream.md` §1.1. The version is
+# pinned via the `OPENCLAW_VERSION` build arg above (default `latest`
+# until upstream declares a stable tag) so nightly E2E runs are
+# reproducible against a known version. To bump the pin, change the
+# `ARG OPENCLAW_VERSION=` default at the top of this file and document
+# the new floor in `e2e/README.md`.
 #
 # If this RUN fails because the package isn't actually published on
-# npm under that name, the failure surfaces here cleanly; document the
-# fallback in `e2e/README.md`.
-RUN npm install -g openclaw
+# npm under the requested version, the failure surfaces here cleanly;
+# the manual fallback is documented in `e2e/README.md`.
+RUN npm install -g openclaw@${OPENCLAW_VERSION}
 
 # ---- Pack the vendored clawg-ui ------------------------------------------
 WORKDIR /build/clawg-ui

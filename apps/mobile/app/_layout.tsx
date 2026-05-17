@@ -84,15 +84,32 @@ function Gate() {
   // Build the CopilotKit runtime config. Memoized so the provider
   // doesn't re-mount on unrelated re-renders (a re-mount would drop the
   // action/readable registry mid-stream).
-  const copilotConfig = useMemo<{ runtimeUrl: string; token: string } | null>(() => {
+  //
+  // Q46: when the desktop advertised a `clawgUiBaseUrl` at pairing time,
+  // we route real-mode chat directly at the daemon's `/v1/clawg-ui`
+  // endpoint by passing `mode: 'clawg-ui'` + the daemon BASE URL. Falls
+  // back to the legacy p05c adapter URL when the field is absent (stub
+  // mode or pre-Wave-15 desktops).
+  const copilotConfig = useMemo<{
+    runtimeUrl: string;
+    token: string;
+    mode: 'p05c' | 'clawg-ui';
+  } | null>(() => {
     if (state.status !== 'paired') return null;
     if (!state.token?.value) return null;
+    if (state.clawgUiBaseUrl) {
+      return {
+        runtimeUrl: state.clawgUiBaseUrl,
+        token: state.token.value,
+        mode: 'clawg-ui',
+      };
+    }
     try {
       const runtimeUrl = resolveRuntimeUrl({
         ...(state.runtimeUrl ? { runtimeUrl: state.runtimeUrl } : {}),
         ...(state.httpBase ? { httpBase: state.httpBase } : {}),
       });
-      return { runtimeUrl, token: state.token.value };
+      return { runtimeUrl, token: state.token.value, mode: 'p05c' };
     } catch {
       // No runtime URL or httpBase — paired session is in an inconsistent
       // state (older build that didn't persist them). The user will need
@@ -100,7 +117,7 @@ function Gate() {
       // load; the chat screen will throw a friendlier error.
       return null;
     }
-  }, [state.status, state.runtimeUrl, state.httpBase, state.token?.value]);
+  }, [state.status, state.runtimeUrl, state.httpBase, state.clawgUiBaseUrl, state.token?.value]);
 
   if (state.status === 'paired' && inPairingGroup) {
     return <Redirect href="/(tabs)" />;
@@ -129,7 +146,11 @@ function Gate() {
       <ReconnectBanner state={reconnect} />
       <View style={styles.body}>
         {copilotConfig ? (
-          <CopilotKitProvider runtimeUrl={copilotConfig.runtimeUrl} token={copilotConfig.token}>
+          <CopilotKitProvider
+            runtimeUrl={copilotConfig.runtimeUrl}
+            token={copilotConfig.token}
+            mode={copilotConfig.mode}
+          >
             {stackContent}
           </CopilotKitProvider>
         ) : (

@@ -221,6 +221,18 @@ async function bootPairing(): Promise<void> {
   // is off, loopback is correct (only the local renderer will call it).
   const runtimeHost = lanEnabled ? osHostname() : '127.0.0.1';
 
+  // Compute the upstream clawg-ui daemon base URL up front so we can both
+  // advertise it to mobile at pairing time (Q46) AND reuse it below when
+  // wiring the clawg-ui identity store / pairing controller. Resolution
+  // matches the values used by the desktop's own clawg-ui client (see
+  // the `gateway_mode === 'clawg-ui'` branch further down). Only forwarded
+  // to the pairing controller when we're actually in clawg-ui mode so
+  // stub-mode pairing payloads stay byte-identical to pre-Wave-15 builds.
+  const gatewayHost = process.env['OPENCLAW_GATEWAY_HOST'] ?? '127.0.0.1';
+  const gatewayPort = Number.parseInt(process.env['OPENCLAW_GATEWAY_PORT'] ?? '', 10) || 18789;
+  const clawgUiBaseUrl =
+    cfg.gateway_mode === 'clawg-ui' ? `http://${gatewayHost}:${gatewayPort}` : undefined;
+
   pairing = await buildPairingController({
     userDataDir: app.getPath('userData'),
     version: APP_VERSION,
@@ -228,6 +240,7 @@ async function bootPairing(): Promise<void> {
     getWindow: getMainWindow,
     Notification: IS_MAC ? Notification : undefined,
     runtimeUrl: buildRuntimeUrl(runtimeHost, PORT),
+    ...(clawgUiBaseUrl !== undefined ? { clawgUiBaseUrl } : {}),
   });
 
   await pairing.server.fastify.listen({ host, port: PORT });
@@ -284,9 +297,9 @@ async function bootPairing(): Promise<void> {
       // Chat itself does NOT route through the local WS+stub in
       // clawg-ui mode — clients hit the daemon's HTTP endpoint
       // directly. The WS server stays mounted for the
-      // canvas/voice/setActiveAgent error envelopes above.
-      const gatewayHost = process.env['OPENCLAW_GATEWAY_HOST'] ?? '127.0.0.1';
-      const gatewayPort = Number.parseInt(process.env['OPENCLAW_GATEWAY_PORT'] ?? '', 10) || 18789;
+      // canvas/voice/setActiveAgent error envelopes above. `gatewayHost`
+      // + `gatewayPort` were resolved at the top of `bootPairing` so the
+      // same value flows to the pairing controller (Q46 wiring).
       const upstreamIdentity = await clawgUiIdentities.read(gatewayHost, gatewayPort);
       // eslint-disable-next-line no-console
       console.log(
@@ -393,6 +406,11 @@ async function bootPairing(): Promise<void> {
       ipcMain,
       getWindow: getMainWindow,
       Notification: IS_MAC ? Notification : undefined,
+      // Fix 1 (Wave 15 review): persist the renderer's 403-discovered
+      // token via the same identity store the desktop's own clawg-ui
+      // client writes to, so a renderer-driven pairing and a future
+      // main-driven retry share state.
+      ...(clawgUiIdentities ? { identityStore: clawgUiIdentities } : {}),
       onStateChange: () => {
         // Refresh the tray menu so the "Pending pairing: ABCD1234"
         // entry appears/disappears as transitions land.

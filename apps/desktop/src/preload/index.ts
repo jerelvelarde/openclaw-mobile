@@ -18,6 +18,7 @@ import {
   PendingPairView,
   SelfTokenView,
   SettingsView,
+  type ClawgUiPairingNotifyPendingPayload,
 } from './ipc-channels';
 
 /** Result shape returned by the clawg-ui CLI approve handler. */
@@ -131,6 +132,20 @@ const api = {
      */
     deny: async (reason?: string): Promise<boolean> => {
       return (await ipcRenderer.invoke(CLAWG_UI_IPC.PAIRING_DENY, reason)) as boolean;
+    },
+    /**
+     * Notify main that a renderer-originated POST to `/v1/clawg-ui` got a
+     * `403 pairing_pending`. Main persists the bearer token in the
+     * identity store keyed by `host:port` (so the next retry already
+     * authenticates) and triggers the notification + Settings banner +
+     * tray entry the desktop's own client would have triggered.
+     *
+     * The renderer detects the 403 via the sniffer in
+     * `src/renderer/src/clawgUi/pairingSniffer.ts` (see Fix 1 of the
+     * Wave 15 review block) and calls into this handle.
+     */
+    notifyPending: async (payload: ClawgUiPairingNotifyPendingPayload): Promise<boolean> => {
+      return (await ipcRenderer.invoke(CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING, payload)) as boolean;
     },
     /** Reset the state machine to `idle` (clears any terminal state). */
     dismiss: async (): Promise<boolean> => {

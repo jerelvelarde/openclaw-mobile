@@ -49,6 +49,18 @@ export const CLAWG_UI_IPC = {
   PAIRING_DENY: 'clawg-ui:pairing:deny',
   /** Renderer → main: reset the state machine to `idle`. */
   PAIRING_DISMISS: 'clawg-ui:pairing:dismiss',
+  /**
+   * Renderer → main: notify that a renderer-originated POST to
+   * `<host>:<port>/v1/clawg-ui` returned a `403 pairing_pending` carrying
+   * `{ pairingCode, token }`. Main persists the token in the identity
+   * store (so the next retry already authenticates) and triggers the
+   * notification + Settings banner + tray entry via the controller.
+   *
+   * Payload: `{ pairingCode: string; token: string; host: string; port: number }`.
+   * `host` + `port` MUST be the same values the renderer hit so the
+   * identity store keys line up with the desktop's own clawg-ui client.
+   */
+  PAIRING_NOTIFY_PENDING: 'clawg-ui:pairing:notify-pending',
   /** Main → renderer: state machine transition. */
   PAIRING_STATE_EVENT: 'clawg-ui:pairing:state-event',
   /**
@@ -57,6 +69,22 @@ export const CLAWG_UI_IPC = {
    */
   NAVIGATE_TO_SETTINGS: 'clawg-ui:navigate-settings',
 } as const;
+
+/** Payload shape for {@link CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING}. */
+export interface ClawgUiPairingNotifyPendingPayload {
+  /** The short alphanumeric code the user types into `openclaw pairing approve`. */
+  pairingCode: string;
+  /**
+   * Device token returned in the 403 body. Main persists this verbatim
+   * via the identity store so the next renderer POST retries with
+   * `Authorization: Bearer <token>`.
+   */
+  token: string;
+  /** Daemon host (must match the renderer's POST target). */
+  host: string;
+  /** Daemon port (must match the renderer's POST target). */
+  port: number;
+}
 
 /** Payload sent over `PAIRING_PENDING_EVENT` and returned by `PAIRING_LIST_PENDING`. */
 export interface PendingPairView {
