@@ -15,7 +15,7 @@
 // We inject a fake `socketFactory` so the test owns both ends of the
 // "wire" without spawning a real WS server.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -98,9 +98,14 @@ let keystore: Keystore;
 beforeEach(async () => {
   tmp = mkdtempSync(join(tmpdir(), 'openclaw-bridge-'));
   keystore = await openKeystore(tmp, 'dev.openclaw.bridge.test');
+  // Silence the P11A deprecation warning emitted by `attachOpenClawBridge`
+  // so the test output stays clean. The bridge itself still functions; we
+  // only suppress the noisy console.warn the deprecation hook emits.
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   rmSync(tmp, { recursive: true, force: true });
 });
 

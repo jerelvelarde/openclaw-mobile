@@ -1,3 +1,15 @@
+/**
+ * @deprecated The P10A bridge is superseded by the clawg-ui pivot
+ * (`vendor/clawg-ui/` @ v0.7.0). Real-mode chat now POSTs directly to
+ * the gateway's clawg-ui plugin, which has its own HTTP pairing
+ * handshake (`vendor/clawg-ui/src/http-handler.ts:260–338`) — no
+ * Ed25519 challenge/response, no WebSocket connect frame. See
+ * `.chalk/plans/P11A-adopt-clawg-ui-clients.md` for the replacement
+ * (`apps/desktop/src/main/clawg-ui/identity.ts` +
+ * `apps/desktop/src/main/clawg-ui/client.ts`). This module is scheduled
+ * for removal in `.chalk/plans/P11D-tear-down-openclaw-bridge.md`.
+ */
+
 // Pairing + connect handshake for the upstream OpenClaw gateway.
 //
 // Per `.chalk/openclaw-upstream.md` §3.3 + §9, the wire to the real

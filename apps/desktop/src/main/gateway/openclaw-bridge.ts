@@ -1,3 +1,14 @@
+/**
+ * @deprecated The P10A bridge is superseded by the clawg-ui pivot
+ * (`vendor/clawg-ui/` @ v0.7.0). Real-mode chat now POSTs directly to
+ * the gateway's clawg-ui plugin (`POST /v1/clawg-ui`); see
+ * `.chalk/plans/P11A-adopt-clawg-ui-clients.md` for the client wiring
+ * and `apps/desktop/src/main/clawg-ui/client.ts` for the replacement.
+ * This module is scheduled for removal in
+ * `.chalk/plans/P11D-tear-down-openclaw-bridge.md`. Do not add new
+ * callers — `apps/desktop/src/main/index.ts` no longer instantiates it.
+ */
+
 // Real-gateway bridge — translates our `Router`-shaped API into the
 // upstream OpenClaw daemon's JSON-RPC `req`/`res`/`event` framing over
 // WebSocket. Chat-only happy path per `.chalk/openclaw-upstream.md` and
@@ -304,10 +315,17 @@ export function defaultSocketFactory(url: string): UpstreamSocket {
  * Attach the real-gateway bridge to the given router. Returns a handle
  * whose `detach()` tears down the WS connection + every subscription.
  *
- * This is the entry point `apps/desktop/src/main/index.ts` calls when
- * `settings.gateway_mode === "real"`.
+ * @deprecated Superseded by the clawg-ui pivot (P11A). The desktop main
+ * process no longer calls this when `settings.gateway_mode ===
+ * "clawg-ui"` — real-mode chat now POSTs directly to the plugin's
+ * `/v1/clawg-ui` endpoint. Existing callers will see a `console.warn`
+ * on attach. Full removal lands in P11D.
  */
 export async function attachOpenClawBridge(opts: OpenClawBridgeOptions): Promise<OpenClawBridge> {
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[openclaw] attachOpenClawBridge() is deprecated (P11A). Real-mode chat now routes via the clawg-ui plugin (POST /v1/clawg-ui); see apps/desktop/src/main/clawg-ui/client.ts. This bridge is scheduled for removal in P11D.',
+  );
   const upstreamUrl = opts.upstreamUrl ?? 'ws://127.0.0.1:18789/';
   const socketFactory = opts.socketFactory ?? defaultSocketFactory;
   const reconnectMinMs = opts.reconnectMinMs ?? 500;

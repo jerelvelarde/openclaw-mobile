@@ -51,11 +51,11 @@ describe('SettingsStore', () => {
     expect(store.read().gateway_mode).toBe('stub');
   });
 
-  it('persists a gateway_mode update to "real"', () => {
+  it('persists a gateway_mode update to "clawg-ui"', () => {
     const store = new SettingsStore(tmp);
-    const updated = store.update({ gateway_mode: 'real' });
-    expect(updated.gateway_mode).toBe('real');
-    expect(new SettingsStore(tmp).read().gateway_mode).toBe('real');
+    const updated = store.update({ gateway_mode: 'clawg-ui' });
+    expect(updated.gateway_mode).toBe('clawg-ui');
+    expect(new SettingsStore(tmp).read().gateway_mode).toBe('clawg-ui');
   });
 
   it('coerces unknown gateway_mode values back to the default', () => {
@@ -63,5 +63,26 @@ describe('SettingsStore', () => {
     writeFileSync(path, JSON.stringify({ version: 1, gateway_mode: 'turbo' }));
     const store = new SettingsStore(tmp);
     expect(store.read().gateway_mode).toBe(DEFAULT_SETTINGS.gateway_mode);
+  });
+
+  it('migrates legacy gateway_mode "real" forward to "clawg-ui" on read (P11A)', () => {
+    const path = join(tmp, 'settings.json');
+    writeFileSync(path, JSON.stringify({ version: 1, gateway_mode: 'real' }));
+    const store = new SettingsStore(tmp);
+    expect(store.read().gateway_mode).toBe('clawg-ui');
+  });
+
+  it('migrates legacy gateway_mode "realgateway" forward to "clawg-ui" on read (P11A)', () => {
+    const path = join(tmp, 'settings.json');
+    writeFileSync(path, JSON.stringify({ version: 1, gateway_mode: 'realgateway' }));
+    const store = new SettingsStore(tmp);
+    expect(store.read().gateway_mode).toBe('clawg-ui');
+  });
+
+  it('keeps gateway_mode "stub" as "stub" (no migration)', () => {
+    const path = join(tmp, 'settings.json');
+    writeFileSync(path, JSON.stringify({ version: 1, gateway_mode: 'stub' }));
+    const store = new SettingsStore(tmp);
+    expect(store.read().gateway_mode).toBe('stub');
   });
 });
