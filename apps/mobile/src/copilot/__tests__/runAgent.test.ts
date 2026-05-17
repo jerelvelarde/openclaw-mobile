@@ -147,4 +147,48 @@ describe('runAgent', () => {
       'Content-Type': 'application/json',
     });
   });
+
+  // ── P11A: clawg-ui mode targets POST /v1/clawg-ui with header routing ──
+  it('mode "clawg-ui" POSTs to /v1/clawg-ui with the agent id in a header', async () => {
+    const fetchSpy = fakeFetch(eventLines([]));
+    await runAgent({
+      mode: 'clawg-ui',
+      // In clawg-ui mode `runtimeUrl` is the daemon base URL.
+      runtimeUrl: 'http://192.168.1.42:18789',
+      agentId: 'hermes',
+      // In clawg-ui mode `token` is the clawg-ui device token, not the
+      // pairing token.
+      token: 'tok.sig',
+      input: { threadId: 't', runId: 'r', messages: [{ id: 'u', role: 'user', content: 'hi' }] },
+      fetchImpl: fetchSpy,
+    });
+    const [url, init] = (fetchSpy as unknown as jest.Mock).mock.calls[0];
+    expect(url).toBe('http://192.168.1.42:18789/v1/clawg-ui');
+    expect((init as RequestInit).method).toBe('POST');
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers).toMatchObject({
+      Authorization: 'Bearer tok.sig',
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      'X-OpenClaw-Agent-Id': 'hermes',
+    });
+    // The URL must NOT include /agent/:id — that's the P05C convention.
+    expect(url).not.toMatch(/\/agent\//);
+  });
+
+  it('mode "clawg-ui" forwards a valid session key as a header', async () => {
+    const fetchSpy = fakeFetch(eventLines([]));
+    await runAgent({
+      mode: 'clawg-ui',
+      runtimeUrl: 'http://h:1',
+      agentId: 'main',
+      token: 'tok',
+      input: { threadId: 't', runId: 'r', messages: [{ id: 'u', role: 'user', content: 'hi' }] },
+      sessionKey: 'alice@example.com',
+      fetchImpl: fetchSpy,
+    });
+    const [, init] = (fetchSpy as unknown as jest.Mock).mock.calls[0];
+    const headers = (init as RequestInit).headers as Record<string, string>;
+    expect(headers['X-OpenClaw-Session-Key']).toBe('alice@example.com');
+  });
 });

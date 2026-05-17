@@ -1,13 +1,30 @@
-// Settings page (P04B).
+// Settings page (P04B, extended in P11A).
 //
-// Read-only view of the persisted `settings.json` (currently just
-// `lan_enabled`). The toggle is rendered for visual completeness but
+// Read-only view of the persisted `settings.json` (`lan_enabled` +
+// `gateway_mode`). The toggles are rendered for visual completeness but
 // disabled — runtime toggling requires restarting the pairing + WS
 // servers on a different bind address, which is out of scope for v1.
 // See open question 24.
+//
+// In P11A the `gateway_mode` enum changed from `"stub" | "real"` to
+// `"stub" | "clawg-ui"`; legacy `"real"` values migrate to `"clawg-ui"`
+// on read (see `main/settings.ts#coerceGatewayMode`).
 
 import { useEffect, useState } from 'react';
 import type { SettingsView } from '../../../preload/ipc-channels';
+
+function describeGatewayMode(mode: SettingsView['gateway_mode']): string {
+  switch (mode) {
+    case 'clawg-ui':
+      // The actual pairing-code surfacing lives in P11B once the
+      // identity store is exposed over IPC. For now this is the
+      // educational copy.
+      return '— real-mode chat routes through the user\'s openclaw daemon via the @contextableai/clawg-ui plugin (POST /v1/clawg-ui). Canvas + voice + agents.setActive surface "unsupportedInRealMode" errors (tracked in P11C).';
+    case 'stub':
+    default:
+      return '— in-process echo stub (default; full chat/canvas/voice surfaces, no external daemon).';
+  }
+}
 
 export function Settings(): JSX.Element {
   const [settings, setSettings] = useState<SettingsView | null>(null);
@@ -56,9 +73,7 @@ export function Settings(): JSX.Element {
           <label>
             <strong>Gateway mode:</strong> <code>{settings.gateway_mode}</code>{' '}
             <span aria-label="gateway mode (read-only)">
-              {settings.gateway_mode === 'real'
-                ? '— bridging to a real openclaw gateway daemon (canvas + voice disabled)'
-                : '— in-process echo stub (default; full chat/canvas/voice surfaces)'}
+              {describeGatewayMode(settings.gateway_mode)}
             </span>
           </label>
         </li>

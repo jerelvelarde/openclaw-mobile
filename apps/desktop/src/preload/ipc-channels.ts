@@ -59,11 +59,14 @@ export interface SettingsView {
   lan_enabled: boolean;
   /**
    * Which gateway plumbing the desktop boots. `"stub"` keeps the legacy
-   * in-process echo gateway; `"real"` switches to the OpenClawBridge
-   * (P10A) that talks to a real `openclaw gateway` daemon over WebSocket.
-   * Restart-only.
+   * in-process echo gateway; `"clawg-ui"` (P11A) routes real-mode chat
+   * through the user's running `openclaw gateway` daemon at
+   * `POST <host>:18789/v1/clawg-ui` (the AG-UI/SSE endpoint exposed by
+   * the `@contextableai/clawg-ui` plugin pinned at `vendor/clawg-ui/`).
+   * Restart-only. Legacy persisted `"real"` values migrate to
+   * `"clawg-ui"` on read (see `main/settings.ts#coerceGatewayMode`).
    */
-  gateway_mode: 'stub' | 'real';
+  gateway_mode: 'stub' | 'clawg-ui';
 }
 
 /**
