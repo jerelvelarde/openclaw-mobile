@@ -8,12 +8,11 @@
 // equivalent because the plugin routes per-request via
 // `X-OpenClaw-Agent-Id` instead of a persistent "active agent" state.
 //
-// In `gateway_mode === "clawg-ui"` the legacy P10A bridge (which used
-// to short-circuit these surfaces with a typed error envelope) is no
-// longer instantiated. To keep clients seeing structured errors instead
-// of timeouts, we subscribe to the same topics here and reply with the
-// same `unsupportedInRealMode` shape the bridge used (see
-// `apps/desktop/src/main/gateway/openclaw-bridge.ts#UnsupportedInRealModeError`).
+// In `gateway_mode === "clawg-ui"` we subscribe to the chat-only-
+// unsupported router topics directly here and reply with a typed
+// `unsupportedInRealMode` envelope, so clients see a structured error
+// instead of a WS timeout. (P11D removed the legacy P10A gateway
+// translator that previously owned this short-circuit.)
 //
 // Q41 (open-questions §41) asked for UI surfacing of these errors. The
 // renderer's `useGateway` hook already renders `lastError` from the
@@ -27,8 +26,8 @@ import type { Router } from '../transport/router';
 
 /**
  * Error envelope returned to clients when a router topic is not
- * supported in clawg-ui mode. Wire-compatible with the bridge's
- * `UnsupportedInRealModeError` (`gateway/openclaw-bridge.ts`).
+ * supported in clawg-ui mode. Wire-compatible with the envelope the
+ * P10A translator used to emit before P11D removed it.
  */
 export interface UnsupportedInRealModeError {
   ok: false;
