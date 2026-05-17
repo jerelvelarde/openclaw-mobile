@@ -28,13 +28,21 @@ export const KEYSTORE_SERVICE = 'dev.openclaw.desktop';
 /**
  * Minimal interface implemented by both the keytar-backed and the
  * file-encrypted-backed keystores. Keep the surface tight — anything more
- * than `get`/`set` belongs in a higher-level module (e.g. `keypair.ts`).
+ * than `get`/`set`/`delete` belongs in a higher-level module (e.g.
+ * `keypair.ts`).
  */
 export interface Keystore {
   /** Returns the stored secret for `account`, or `null` if absent. */
   getSecret(account: string): Promise<string | null>;
   /** Persists `value` for `account`, overwriting any prior value. */
   setSecret(account: string, value: string): Promise<void>;
+  /**
+   * Removes `account` from the keystore. Returns `true` when an entry was
+   * deleted, `false` when no entry was present. Used by P11D's one-shot
+   * migration to wipe the orphaned bridge accounts; new callers should
+   * prefer leaving entries in place over deleting them.
+   */
+  deleteSecret(account: string): Promise<boolean>;
   /** Human-readable backend name, used in diagnostics + tests. */
   readonly backend: 'keytar' | 'file';
 }
@@ -148,6 +156,14 @@ class FileKeystore implements Keystore {
     };
     writeEnvelope(this.filePath, env);
   }
+
+  async deleteSecret(account: string): Promise<boolean> {
+    const env = readEnvelope(this.filePath);
+    if (!(account in env.entries)) return false;
+    delete env.entries[account];
+    writeEnvelope(this.filePath, env);
+    return true;
+  }
 }
 
 /** Thin adapter so the keytar API matches our `Keystore` interface. */
@@ -165,6 +181,10 @@ class KeytarKeystore implements Keystore {
 
   async setSecret(account: string, value: string): Promise<void> {
     await this.keytarModule.setPassword(this.service, account, value);
+  }
+
+  async deleteSecret(account: string): Promise<boolean> {
+    return this.keytarModule.deletePassword(this.service, account);
   }
 }
 

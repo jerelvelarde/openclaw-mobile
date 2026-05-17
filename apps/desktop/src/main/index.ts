@@ -21,6 +21,10 @@ import { join } from 'node:path';
 // the main process. The real wiring lands in P04B (transport). Reference it
 // as a type so tree-shaking drops it at runtime.
 import type { Agent } from '@openclaw/protocol';
+import {
+  buildClawgUiPairingController,
+  type ClawgUiPairingController,
+} from './clawg-ui/controller';
 import { buildPairingController, PairingController } from './pair/controller';
 import { openKeystore } from './pair/keystore';
 import { buildRuntimeUrl, DEFAULT_PORT } from './pair/server';
@@ -30,7 +34,15 @@ import { createBonjourPublisher, type BonjourPublisher } from './transport/bonjo
 import { createRouter, type Router } from './transport/router';
 import { attachWsServer, type WsTransport } from './transport/wsServer';
 import { attachStubGateway, type StubGateway } from './gateway/__fixtures__/stub';
-import { attachOpenClawBridge, type OpenClawBridge } from './gateway/openclaw-bridge';
+import {
+  attachClawgUiUnsupportedSurfaces,
+  type ClawgUiUnsupportedAttachment,
+} from './gateway/clawg-ui-unsupported';
+import {
+  openClawgUiIdentityStore,
+  runLegacyBridgeKeystoreCleanup,
+  type ClawgUiIdentityHandle,
+} from './clawg-ui/identity';
 import { registerCopilotRuntime } from './copilot/runtime';
 import { createVoiceRouter, type VoiceRouter } from './voice/router';
 import { loadWrtcDeps } from './voice/peer';
@@ -49,7 +61,11 @@ let pairing: PairingController | null = null;
 let bonjour: BonjourPublisher | null = null;
 let wsTransport: WsTransport | null = null;
 let stubGateway: StubGateway | null = null;
-let openClawBridge: OpenClawBridge | null = null;
+// P11A: clawg-ui-mode plumbing. The legacy P10A bridge slot that lived
+// here was removed when the bridge stopped being called, and the bridge
+// module itself was deleted in P11D.
+let clawgUiUnsupported: ClawgUiUnsupportedAttachment | null = null;
+let clawgUiIdentities: ClawgUiIdentityHandle | null = null;
 let router: Router | null = null;
 let voiceRouter: VoiceRouter | null = null;
 let settings: SettingsStore | null = null;
@@ -57,6 +73,7 @@ let lanEnabled = true;
 let selfToken: SelfToken | null = null;
 let pushClient: PushClient | null = null;
 let pushDispatcher: PushDispatcher | null = null;
+let clawgUiPairing: ClawgUiPairingController | null = null;
 
 // Keep the placeholder import live for typecheck without polluting runtime.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -115,7 +132,24 @@ function showWindowOnRoute(route: string): void {
 function buildTrayMenu(): Electron.Menu {
   const lanLabel = `LAN: ${lanEnabled ? 'enabled' : 'disabled'}`;
   const bonjourLabel = `Bonjour: ${bonjour?.state === 'advertising' ? 'advertising' : 'idle'}`;
+  // Show a "Pending pairing: <code>" entry when the clawg-ui state
+  // machine is in `pending`. Clicking it focuses Settings so the user
+  // can act on the in-window banner. We surface it at the top of the
+  // menu (above the navigation entries) so it's the first thing the
+  // user sees when they click the tray icon during an active request.
+  const clawgUiState = clawgUiPairing?.state.state;
+  const clawgUiHeader: Electron.MenuItemConstructorOptions[] =
+    clawgUiState?.status === 'pending'
+      ? [
+          {
+            label: `Pending pairing: ${clawgUiState.pairingCode}`,
+            click: () => showWindowOnRoute('/settings'),
+          },
+          { type: 'separator' },
+        ]
+      : [];
   return Menu.buildFromTemplate([
+    ...clawgUiHeader,
     { label: 'Show', click: () => showWindowOnRoute('/chat') },
     { label: 'Chat', click: () => showWindowOnRoute('/chat') },
     { label: 'Agents…', click: () => showWindowOnRoute('/agents') },
@@ -187,6 +221,18 @@ async function bootPairing(): Promise<void> {
   // is off, loopback is correct (only the local renderer will call it).
   const runtimeHost = lanEnabled ? osHostname() : '127.0.0.1';
 
+  // Compute the upstream clawg-ui daemon base URL up front so we can both
+  // advertise it to mobile at pairing time (Q46) AND reuse it below when
+  // wiring the clawg-ui identity store / pairing controller. Resolution
+  // matches the values used by the desktop's own clawg-ui client (see
+  // the `gateway_mode === 'clawg-ui'` branch further down). Only forwarded
+  // to the pairing controller when we're actually in clawg-ui mode so
+  // stub-mode pairing payloads stay byte-identical to pre-Wave-15 builds.
+  const gatewayHost = process.env['OPENCLAW_GATEWAY_HOST'] ?? '127.0.0.1';
+  const gatewayPort = Number.parseInt(process.env['OPENCLAW_GATEWAY_PORT'] ?? '', 10) || 18789;
+  const clawgUiBaseUrl =
+    cfg.gateway_mode === 'clawg-ui' ? `http://${gatewayHost}:${gatewayPort}` : undefined;
+
   pairing = await buildPairingController({
     userDataDir: app.getPath('userData'),
     version: APP_VERSION,
@@ -194,31 +240,83 @@ async function bootPairing(): Promise<void> {
     getWindow: getMainWindow,
     Notification: IS_MAC ? Notification : undefined,
     runtimeUrl: buildRuntimeUrl(runtimeHost, PORT),
+    ...(clawgUiBaseUrl !== undefined ? { clawgUiBaseUrl } : {}),
   });
 
   await pairing.server.fastify.listen({ host, port: PORT });
 
-  // ---- WS transport + gateway plumbing ----------------------------------
-  // `gateway_mode` selects between the legacy in-process stub (default
-  // — chat/canvas/voice all served locally) and the real-gateway bridge
-  // (`OpenClawBridge` — P10A) that proxies to an installed
-  // `openclaw gateway` daemon. The flip is restart-only; see Settings.
-  router = createRouter();
-  if (cfg.gateway_mode === 'real') {
-    try {
-      const bridgeKeystore = await openKeystore(app.getPath('userData'));
-      openClawBridge = await attachOpenClawBridge({
-        router,
-        keystore: bridgeKeystore,
-        upstreamUrl: process.env['OPENCLAW_UPSTREAM_WS_URL'] ?? undefined,
-        bootstrapToken: process.env['OPENCLAW_UPSTREAM_BOOTSTRAP_TOKEN'] ?? undefined,
-      });
-    } catch (err) {
-      // Don't crash the app — fall back to the stub so chat keeps working
-      // and the user can see something's wrong via the Settings UI.
+  // ---- Legacy bridge keystore cleanup (P11D) ----------------------------
+  // The P10A real-gateway bridge minted three keystore entries on first
+  // connect (its Ed25519 keypair + the upstream-issued device token).
+  // P11D deleted the bridge module; those entries are now dead weight.
+  // Fire a one-shot wipe on every launch — the second run is a no-op.
+  // We don't gate on `gateway_mode`: the entries are orphaned in both
+  // `stub` and `clawg-ui`.
+  try {
+    const cleanupKeystore = await openKeystore(app.getPath('userData'));
+    const removed = await runLegacyBridgeKeystoreCleanup(cleanupKeystore);
+    if (removed.length > 0) {
       // eslint-disable-next-line no-console
-      console.error('[openclaw] real-gateway bridge failed to attach; using stub:', err);
-      openClawBridge = null;
+      console.log(`[openclaw] P11D keystore cleanup removed: ${removed.join(', ')}`);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[openclaw] P11D keystore cleanup failed (ignored):', err);
+  }
+
+  // ---- WS transport + gateway plumbing ----------------------------------
+  // `gateway_mode` selects between two paths:
+  //
+  //   - `"stub"` (default): the legacy in-process echo gateway provides
+  //     chat / canvas / voice locally. The renderer + mobile both speak
+  //     through the same fastify-mounted CopilotKit runtime adapter
+  //     (P05C, `copilot/runtime.ts`) — the WS server forwards their
+  //     frames to the stub.
+  //
+  //   - `"clawg-ui"` (P11A): real-mode chat skips the in-process
+  //     translator and routes directly at the user's running
+  //     `openclaw gateway` daemon via the `@contextableai/clawg-ui`
+  //     plugin's `POST /v1/clawg-ui` endpoint. The clients (renderer +
+  //     mobile) construct the URL themselves; the main process only owns
+  //     (a) the persistent per-gateway device-token store and (b) a
+  //     small router shim that replies with `unsupportedInRealMode` for
+  //     canvas / voice / `agents.setActive` (since clawg-ui is
+  //     chat-only). The legacy P10A bridge that used to live in this
+  //     branch was deleted in P11D.
+  //
+  // The flip is restart-only; see the Settings page.
+  router = createRouter();
+  if (cfg.gateway_mode === 'clawg-ui') {
+    try {
+      const clawgKeystore = await openKeystore(app.getPath('userData'));
+      clawgUiIdentities = openClawgUiIdentityStore(clawgKeystore);
+      // Surface canvas / voice / agents.setActive failures as structured
+      // errors instead of WS timeouts. Mobile + renderer already render
+      // `lastError` on the chat surface (Q41).
+      clawgUiUnsupported = attachClawgUiUnsupportedSurfaces({ router });
+      // Chat itself does NOT route through the local WS+stub in
+      // clawg-ui mode — clients hit the daemon's HTTP endpoint
+      // directly. The WS server stays mounted for the
+      // canvas/voice/setActiveAgent error envelopes above. `gatewayHost`
+      // + `gatewayPort` were resolved at the top of `bootPairing` so the
+      // same value flows to the pairing controller (Q46 wiring).
+      const upstreamIdentity = await clawgUiIdentities.read(gatewayHost, gatewayPort);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[openclaw] Real-mode chat will route via clawg-ui at http://${gatewayHost}:${gatewayPort}/v1/clawg-ui (device token: ${upstreamIdentity?.deviceToken ? 'present' : 'absent'}${upstreamIdentity?.pairingCode ? `, pairing pending — code ${upstreamIdentity.pairingCode}` : ''})`,
+      );
+    } catch (err) {
+      // Don't crash the app — fall back to the stub so the renderer
+      // surface keeps working and the user can see something's wrong
+      // in the Settings UI.
+      // eslint-disable-next-line no-console
+      console.error(
+        '[openclaw] clawg-ui identity store failed to attach; falling back to stub:',
+        err,
+      );
+      clawgUiUnsupported?.detach();
+      clawgUiUnsupported = null;
+      clawgUiIdentities = null;
       stubGateway = attachStubGateway(router);
     }
   } else {
@@ -298,6 +396,29 @@ async function bootPairing(): Promise<void> {
     pushClient,
   });
 
+  // ---- clawg-ui pairing controller (P11B) -------------------------------
+  // Only mount in `"clawg-ui"` mode: legacy `"stub"` mode uses our P03B
+  // 6-digit pairing flow and never produces a clawg-ui pairing_pending
+  // 403. The controller registers IPC handlers + a notification path
+  // when the bound runtime client (P11A) calls `notifyPending`.
+  if (cfg.gateway_mode === 'clawg-ui') {
+    clawgUiPairing = buildClawgUiPairingController({
+      ipcMain,
+      getWindow: getMainWindow,
+      Notification: IS_MAC ? Notification : undefined,
+      // Fix 1 (Wave 15 review): persist the renderer's 403-discovered
+      // token via the same identity store the desktop's own clawg-ui
+      // client writes to, so a renderer-driven pairing and a future
+      // main-driven retry share state.
+      ...(clawgUiIdentities ? { identityStore: clawgUiIdentities } : {}),
+      onStateChange: () => {
+        // Refresh the tray menu so the "Pending pairing: ABCD1234"
+        // entry appears/disappears as transitions land.
+        refreshTrayMenu();
+      },
+    });
+  }
+
   // ---- Bonjour ----------------------------------------------------------
   if (lanEnabled) {
     bonjour = createBonjourPublisher({
@@ -319,6 +440,12 @@ async function bootPairing(): Promise<void> {
 
 async function teardownTransport(): Promise<void> {
   try {
+    clawgUiPairing?.close();
+  } catch {
+    // ignore
+  }
+  clawgUiPairing = null;
+  try {
     pushDispatcher?.detach();
   } catch {
     // ignore
@@ -338,11 +465,12 @@ async function teardownTransport(): Promise<void> {
   }
   stubGateway = null;
   try {
-    await openClawBridge?.detach();
+    clawgUiUnsupported?.detach();
   } catch {
     // ignore
   }
-  openClawBridge = null;
+  clawgUiUnsupported = null;
+  clawgUiIdentities = null;
   try {
     await wsTransport?.close();
   } catch {

@@ -1,0 +1,3 @@
+[submodule "vendor/clawg-ui"]
+	path = vendor/clawg-ui
+	url = https://github.com/contextablemark/clawg-ui

@@ -44,4 +44,15 @@ describe('openKeystore (file fallback)', () => {
     expect(existsSync(join(tmp, 'keystore.enc'))).toBe(true);
     expect(onDisk).not.toContain('plaintext-secret-marker');
   });
+
+  it('deleteSecret returns false on a missing account and true after a delete (P11D)', async () => {
+    const ks = await openKeystore(tmp, 'dev.openclaw.desktop.test');
+    expect(await ks.deleteSecret('does-not-exist')).toBe(false);
+    await ks.setSecret('legacy-account', 'gone-soon');
+    expect(await ks.getSecret('legacy-account')).toBe('gone-soon');
+    expect(await ks.deleteSecret('legacy-account')).toBe(true);
+    expect(await ks.getSecret('legacy-account')).toBeNull();
+    // Second delete of the same account is a no-op.
+    expect(await ks.deleteSecret('legacy-account')).toBe(false);
+  });
 });

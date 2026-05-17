@@ -38,14 +38,30 @@ import {
   type CopilotReadable,
   type CopilotRegistry,
 } from './registry';
+import type { RuntimeMode } from './runtimeUrl';
 import type { AGUIContextEntry, AGUITool } from './types';
 
 /** Public context shape. */
 export interface CopilotKitContextValue {
-  /** Absolute base URL for the runtime adapter (no trailing slash). */
+  /**
+   * Absolute base URL for the runtime adapter (no trailing slash).
+   *
+   * In `mode === 'p05c'` this is the desktop CopilotKit adapter URL
+   * (`http://host:18789/copilot/runtime`). In `mode === 'clawg-ui'` this
+   * is the daemon BASE URL (`http://host:18789`); the `/v1/clawg-ui`
+   * suffix is appended by `runAgent` via `resolveRuntimeRequest`. Q46:
+   * the value comes from `state.clawgUiBaseUrl` in clawg-ui mode.
+   */
   runtimeUrl: string;
   /** Bearer token (raw, without "Bearer " prefix). */
   token: string;
+  /**
+   * Wire mode the runtime client should use. Defaults to `'p05c'` so
+   * existing callers (and tests) don't have to change. Set to
+   * `'clawg-ui'` when the desktop advertised a clawg-ui base URL at
+   * pairing time (P11A/Q46).
+   */
+  mode: RuntimeMode;
   /** Agent id all runs default to until the caller overrides. */
   activeAgent: string;
   /** Update the active agent id (used by `agents.tsx`). */
@@ -66,6 +82,14 @@ export interface CopilotKitProviderProps {
   children: ReactNode;
   runtimeUrl: string;
   token: string;
+  /**
+   * Which wire format the runtime client should speak. Defaults to
+   * `'p05c'` (today's desktop adapter URL). Pass `'clawg-ui'` along
+   * with a clawg-ui daemon BASE URL in `runtimeUrl` to route real-mode
+   * chat through the user's openclaw daemon (Q46). The `runAgent` pump
+   * uses this to pick the right URL + headers.
+   */
+  mode?: RuntimeMode;
   /** Initial active agent — defaults to `openclaw.default`. */
   initialAgent?: string;
 }
@@ -81,6 +105,7 @@ export function CopilotKitProvider({
   children,
   runtimeUrl,
   token,
+  mode,
   initialAgent,
 }: CopilotKitProviderProps): ReactElement {
   // Registry is stable across renders — `useRef` keeps the same Map
@@ -129,10 +154,13 @@ export function CopilotKitProvider({
     [instrumented, version],
   );
 
+  const resolvedMode: RuntimeMode = mode ?? 'p05c';
+
   const value = useMemo<CopilotKitContextValue>(
     () => ({
       runtimeUrl,
       token,
+      mode: resolvedMode,
       activeAgent,
       setActiveAgent,
       tools,
@@ -140,7 +168,7 @@ export function CopilotKitProvider({
       registry: instrumented,
       registryVersion: version,
     }),
-    [runtimeUrl, token, activeAgent, tools, context, instrumented, version],
+    [runtimeUrl, token, resolvedMode, activeAgent, tools, context, instrumented, version],
   );
 
   return <CopilotKitContext.Provider value={value}>{children}</CopilotKitContext.Provider>;

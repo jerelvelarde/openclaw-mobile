@@ -33,6 +33,59 @@ export const IPC = {
   SYSTEM_GET_SELF_TOKEN: 'system:get-self-token',
 } as const;
 
+/**
+ * Channel names for the clawg-ui pairing flow (P11B). Lives in a
+ * separate namespace from `IPC` so a future P03B / P11B coexistence bug
+ * can't accidentally cross-fire — e.g. the legacy `PAIRING_APPROVE`
+ * channel takes a `pair_id`, the clawg-ui `PAIRING_APPROVE` takes a
+ * `pairingCode`.
+ */
+export const CLAWG_UI_IPC = {
+  /** Renderer → main: read the current `ClawgUiPairingState`. */
+  PAIRING_STATE_GET: 'clawg-ui:pairing:state:get',
+  /** Renderer → main: approve a pending pairing by code (spawns CLI). */
+  PAIRING_APPROVE: 'clawg-ui:pairing:approve',
+  /** Renderer → main: deny a pending pairing (local dismissal only). */
+  PAIRING_DENY: 'clawg-ui:pairing:deny',
+  /** Renderer → main: reset the state machine to `idle`. */
+  PAIRING_DISMISS: 'clawg-ui:pairing:dismiss',
+  /**
+   * Renderer → main: notify that a renderer-originated POST to
+   * `<host>:<port>/v1/clawg-ui` returned a `403 pairing_pending` carrying
+   * `{ pairingCode, token }`. Main persists the token in the identity
+   * store (so the next retry already authenticates) and triggers the
+   * notification + Settings banner + tray entry via the controller.
+   *
+   * Payload: `{ pairingCode: string; token: string; host: string; port: number }`.
+   * `host` + `port` MUST be the same values the renderer hit so the
+   * identity store keys line up with the desktop's own clawg-ui client.
+   */
+  PAIRING_NOTIFY_PENDING: 'clawg-ui:pairing:notify-pending',
+  /** Main → renderer: state machine transition. */
+  PAIRING_STATE_EVENT: 'clawg-ui:pairing:state-event',
+  /**
+   * Main → renderer: tray notification fallback asked us to show the
+   * Settings page so the user can approve from the in-window banner.
+   */
+  NAVIGATE_TO_SETTINGS: 'clawg-ui:navigate-settings',
+} as const;
+
+/** Payload shape for {@link CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING}. */
+export interface ClawgUiPairingNotifyPendingPayload {
+  /** The short alphanumeric code the user types into `openclaw pairing approve`. */
+  pairingCode: string;
+  /**
+   * Device token returned in the 403 body. Main persists this verbatim
+   * via the identity store so the next renderer POST retries with
+   * `Authorization: Bearer <token>`.
+   */
+  token: string;
+  /** Daemon host (must match the renderer's POST target). */
+  host: string;
+  /** Daemon port (must match the renderer's POST target). */
+  port: number;
+}
+
 /** Payload sent over `PAIRING_PENDING_EVENT` and returned by `PAIRING_LIST_PENDING`. */
 export interface PendingPairView {
   pair_id: string;
@@ -59,11 +112,13 @@ export interface SettingsView {
   lan_enabled: boolean;
   /**
    * Which gateway plumbing the desktop boots. `"stub"` keeps the legacy
-   * in-process echo gateway; `"real"` switches to the OpenClawBridge
-   * (P10A) that talks to a real `openclaw gateway` daemon over WebSocket.
-   * Restart-only.
+   * in-process echo gateway; `"clawg-ui"` (Wave 15 — P11A/P11B) points
+   * the runtime at the clawg-ui gateway plugin's `/v1/clawg-ui`
+   * endpoint and runs the desktop-wrapped pairing flow. Restart-only.
+   * Legacy persisted `"real"` values migrate to `"clawg-ui"` on read
+   * (see `main/settings.ts#coerceGatewayMode`).
    */
-  gateway_mode: 'stub' | 'real';
+  gateway_mode: 'stub' | 'clawg-ui';
 }
 
 /**

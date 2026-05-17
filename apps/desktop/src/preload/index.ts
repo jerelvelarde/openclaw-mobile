@@ -10,13 +10,26 @@
 // `./ipc-channels.ts` so main + preload can share them.
 
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ClawgUiPairingState } from '@openclaw/protocol';
 import {
+  CLAWG_UI_IPC,
   IPC,
   PairedDeviceView,
   PendingPairView,
   SelfTokenView,
   SettingsView,
+  type ClawgUiPairingNotifyPendingPayload,
 } from './ipc-channels';
+
+/** Result shape returned by the clawg-ui CLI approve handler. */
+export interface ClawgUiApproveResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  binaryPath: string;
+  error?: string;
+}
 
 const api = {
   /** Returns "pong". Smoke-test handle for the IPC bridge. */
@@ -84,6 +97,79 @@ const api = {
      */
     getSelfToken: async (): Promise<SelfTokenView> => {
       return (await ipcRenderer.invoke(IPC.SYSTEM_GET_SELF_TOKEN)) as SelfTokenView;
+    },
+  },
+
+  /**
+   * clawg-ui pairing surface (P11B). Only active when `gateway_mode ===
+   * "clawg-ui"`. The renderer reads `getState()` once on Settings
+   * mount + subscribes via `onStateChange` for live updates. Approve /
+   * Deny shell out (approve) or dismiss locally (deny) — see
+   * `apps/desktop/src/main/clawg-ui/cli.ts` for the spawn details.
+   */
+  clawgUi: {
+    /** Read the current pairing state. Defaults to `{ status: 'idle' }`. */
+    getState: async (): Promise<ClawgUiPairingState> => {
+      return (await ipcRenderer.invoke(CLAWG_UI_IPC.PAIRING_STATE_GET)) as ClawgUiPairingState;
+    },
+    /**
+     * Spawn `openclaw pairing approve clawg-ui <code>` and return the
+     * structured result. The state machine transitions to `approved` or
+     * `error` based on the CLI exit code — the renderer normally watches
+     * the state event rather than this return value, but the result is
+     * exposed for diagnostics.
+     */
+    approve: async (pairingCode: string): Promise<ClawgUiApproveResult> => {
+      return (await ipcRenderer.invoke(
+        CLAWG_UI_IPC.PAIRING_APPROVE,
+        pairingCode,
+      )) as ClawgUiApproveResult;
+    },
+    /**
+     * Locally dismiss the pending pairing (no server RPC — clawg-ui has
+     * no reject command, so the issued pairing code stays valid
+     * server-side until it times out after ~10 minutes).
+     */
+    deny: async (reason?: string): Promise<boolean> => {
+      return (await ipcRenderer.invoke(CLAWG_UI_IPC.PAIRING_DENY, reason)) as boolean;
+    },
+    /**
+     * Notify main that a renderer-originated POST to `/v1/clawg-ui` got a
+     * `403 pairing_pending`. Main persists the bearer token in the
+     * identity store keyed by `host:port` (so the next retry already
+     * authenticates) and triggers the notification + Settings banner +
+     * tray entry the desktop's own client would have triggered.
+     *
+     * The renderer detects the 403 via the sniffer in
+     * `src/renderer/src/clawgUi/pairingSniffer.ts` (see Fix 1 of the
+     * Wave 15 review block) and calls into this handle.
+     */
+    notifyPending: async (payload: ClawgUiPairingNotifyPendingPayload): Promise<boolean> => {
+      return (await ipcRenderer.invoke(CLAWG_UI_IPC.PAIRING_NOTIFY_PENDING, payload)) as boolean;
+    },
+    /** Reset the state machine to `idle` (clears any terminal state). */
+    dismiss: async (): Promise<boolean> => {
+      return (await ipcRenderer.invoke(CLAWG_UI_IPC.PAIRING_DISMISS)) as boolean;
+    },
+    /** Subscribe to state-machine transitions. Returns an unsubscribe fn. */
+    onStateChange: (handler: (state: ClawgUiPairingState) => void): (() => void) => {
+      const listener = (_event: unknown, state: ClawgUiPairingState): void => handler(state);
+      ipcRenderer.on(CLAWG_UI_IPC.PAIRING_STATE_EVENT, listener);
+      return () => {
+        ipcRenderer.removeListener(CLAWG_UI_IPC.PAIRING_STATE_EVENT, listener);
+      };
+    },
+    /**
+     * Subscribe to the "show the Settings page" message that the tray
+     * notification fallback fires when the user clicks the body of the
+     * notification instead of an action button.
+     */
+    onNavigateToSettings: (handler: (route: string) => void): (() => void) => {
+      const listener = (_event: unknown, route: string): void => handler(route);
+      ipcRenderer.on(CLAWG_UI_IPC.NAVIGATE_TO_SETTINGS, listener);
+      return () => {
+        ipcRenderer.removeListener(CLAWG_UI_IPC.NAVIGATE_TO_SETTINGS, listener);
+      };
     },
   },
 } as const;

@@ -7,6 +7,7 @@ import {
   buildRunUrl,
   buildRuntimeHeaders,
   deriveRuntimeUrlFromHttpBase,
+  resolveRuntimeRequest,
   resolveRuntimeUrl,
 } from '../runtimeUrl';
 
@@ -65,5 +66,81 @@ describe('resolveRuntimeUrl', () => {
   });
   it('throws when neither is present', () => {
     expect(() => resolveRuntimeUrl({})).toThrow(/runtimeUrl or httpBase/);
+  });
+});
+
+// ── P11A: mode-discriminated resolver ─────────────────────────────────────
+describe('resolveRuntimeRequest', () => {
+  it('p05c mode returns the legacy adapter URL + bearer headers', () => {
+    const got = resolveRuntimeRequest({
+      mode: 'p05c',
+      agentId: 'openclaw.default',
+      pairingToken: 'tok_p05',
+      runtimeUrl: 'http://192.168.1.42:18789/copilot/runtime',
+    });
+    expect(got.url).toBe('http://192.168.1.42:18789/copilot/runtime/agent/openclaw.default/run');
+    expect(got.headers).toMatchObject({
+      Authorization: 'Bearer tok_p05',
+      'Content-Type': 'application/json',
+    });
+    expect(got.headers['X-OpenClaw-Agent-Id']).toBeUndefined();
+  });
+
+  it('clawg-ui mode targets POST /v1/clawg-ui with header-based agent routing', () => {
+    const got = resolveRuntimeRequest({
+      mode: 'clawg-ui',
+      agentId: 'hermes',
+      clawgUiBaseUrl: 'http://192.168.1.42:18789',
+      clawgUiDeviceToken: 'tok.sig',
+    });
+    expect(got.url).toBe('http://192.168.1.42:18789/v1/clawg-ui');
+    expect(got.headers).toMatchObject({
+      Authorization: 'Bearer tok.sig',
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      'X-OpenClaw-Agent-Id': 'hermes',
+    });
+    expect(got.url).not.toMatch(/\/agent\//);
+  });
+
+  it('clawg-ui mode forwards a valid session key', () => {
+    const got = resolveRuntimeRequest({
+      mode: 'clawg-ui',
+      agentId: 'main',
+      clawgUiBaseUrl: 'http://h:1',
+      clawgUiDeviceToken: 'tok',
+      sessionKey: 'alice@example.com',
+    });
+    expect(got.headers['X-OpenClaw-Session-Key']).toBe('alice@example.com');
+  });
+
+  it('throws if clawg-ui mode is missing the base URL', () => {
+    expect(() =>
+      resolveRuntimeRequest({
+        mode: 'clawg-ui',
+        agentId: 'main',
+        clawgUiDeviceToken: 'tok',
+      }),
+    ).toThrow(/clawgUiBaseUrl/);
+  });
+
+  it('throws if clawg-ui mode is missing the device token', () => {
+    expect(() =>
+      resolveRuntimeRequest({
+        mode: 'clawg-ui',
+        agentId: 'main',
+        clawgUiBaseUrl: 'http://h:1',
+      }),
+    ).toThrow(/clawgUiDeviceToken/);
+  });
+
+  it('throws if p05c mode is missing the pairing token', () => {
+    expect(() =>
+      resolveRuntimeRequest({
+        mode: 'p05c',
+        agentId: 'a',
+        runtimeUrl: 'http://h/copilot/runtime',
+      }),
+    ).toThrow(/pairingToken/);
   });
 });

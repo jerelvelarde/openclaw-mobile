@@ -4,3 +4,6 @@ build/
 out/
 coverage/
 .expo/
+
+# Vendored third-party source (git submodules). Owned upstream.
+vendor/

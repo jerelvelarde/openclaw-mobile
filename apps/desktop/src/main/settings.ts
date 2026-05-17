@@ -17,12 +17,22 @@ import { dirname, join } from 'node:path';
 /**
  * Mode selector for the desktop's gateway plumbing. Flipping this requires
  * an app restart — there's no live-swap. Default is `"stub"` so existing
- * chat/canvas/voice paths keep working. `"real"` switches to the
- * `OpenClawBridge` (P10A) which talks to a real `openclaw gateway` daemon
- * over WebSocket; canvas/voice/setActiveAgent return a typed
- * `unsupportedInRealMode` error in that mode until follow-up plans land.
+ * chat/canvas/voice paths keep working.
+ *
+ * `"clawg-ui"` (P11A) routes real-mode chat through the user's running
+ * `openclaw gateway` daemon at `POST <host>:18789/v1/clawg-ui` — the
+ * AG-UI/SSE endpoint exposed by the `@contextableai/clawg-ui` plugin
+ * pinned at `vendor/clawg-ui/`. Pairing flows via the plugin's
+ * `403 pairing_pending` → `openclaw pairing approve clawg-ui <code>` CLI
+ * handshake wrapped by the desktop's tray + Settings banner (P11B).
+ * Canvas / voice / `setActiveAgent` return a typed `unsupportedInRealMode`
+ * error in that mode until follow-up plans (P11C) land.
+ *
+ * Legacy persisted values of `"real"` migrate forward to `"clawg-ui"`
+ * on read; see {@link coerceGatewayMode}. The legacy P10A WebSocket
+ * translator that originally backed `"real"` was deleted in P11D.
  */
-export type GatewayMode = 'stub' | 'real';
+export type GatewayMode = 'stub' | 'clawg-ui';
 
 /** Shape of the persisted JSON object. */
 export interface SettingsFile {
@@ -47,8 +57,32 @@ export const DEFAULT_SETTINGS: SettingsFile = {
   gateway_mode: 'stub',
 };
 
-function coerceGatewayMode(v: unknown): GatewayMode {
-  return v === 'real' ? 'real' : DEFAULT_SETTINGS.gateway_mode;
+/**
+ * Coerce + migrate persisted gateway-mode values to the current enum.
+ *
+ * Recognised values:
+ *   - `"stub"`     → `"stub"` (unchanged)
+ *   - `"clawg-ui"` → `"clawg-ui"` (current real-mode value)
+ *   - `"real"` / `"realgateway"` → `"clawg-ui"` (legacy P10A bridge values
+ *     migrate forward; the bridge itself was removed in P11D)
+ *   - anything else, including missing/non-string → `DEFAULT_SETTINGS.gateway_mode`
+ *
+ * Returning the migrated value here means a re-write of `settings.json`
+ * (next `update()` call) persists the new spelling — the next read
+ * doesn't need to migrate again.
+ */
+export function coerceGatewayMode(v: unknown): GatewayMode {
+  if (v === 'stub') return 'stub';
+  if (v === 'clawg-ui') return 'clawg-ui';
+  // Legacy P10A values — silently migrate forward. The bridge that
+  // originally backed `"real"` was removed in P11D, but pre-existing
+  // installs may still have the string on disk. We deliberately don't
+  // log this; settings.ts is constructed often in tests + IPC handlers
+  // and the noise isn't worth it. `gateway_mode` is restart-only, so the
+  // migration is observed at boot and immediately persisted on the next
+  // SettingsStore.update(...) call.
+  if (v === 'real' || v === 'realgateway') return 'clawg-ui';
+  return DEFAULT_SETTINGS.gateway_mode;
 }
 
 function read(filePath: string): SettingsFile {

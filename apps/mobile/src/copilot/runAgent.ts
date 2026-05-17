@@ -22,7 +22,12 @@
 //     mirror-side client is straightforward.
 // See P05A's "CopilotKit RN package decision" report for the rationale.
 
-import { buildRunUrl, buildRuntimeHeaders } from './runtimeUrl';
+import {
+  buildRunUrl,
+  buildRuntimeHeaders,
+  resolveRuntimeRequest,
+  type RuntimeMode,
+} from './runtimeUrl';
 import { readSseFromResponse, type ParsedSseFrame, type ReadSseOptions } from './sse';
 import { AGUI_EVENT_TYPE, type AGUIEvent, type RunAgentInput } from './types';
 
@@ -114,6 +119,24 @@ export interface RunAgentOptions {
   fetchImpl?: typeof fetch;
   /** Inject the SSE reader (testing). */
   readerFactory?: ReadSseOptions['readerFactory'];
+  /**
+   * Which wire format to use (P11A). Defaults to `"p05c"` — today's
+   * desktop adapter URL + bearer token. Set to `"clawg-ui"` when the
+   * desktop is in `gateway_mode: "clawg-ui"` and the pairing handshake
+   * gave us a clawg-ui device token + base URL.
+   *
+   * In `"clawg-ui"` mode, `runtimeUrl` is interpreted as the daemon
+   * BASE URL (e.g. `http://192.168.1.42:18789`) and `token` is the
+   * clawg-ui device token. The agent id moves from the URL path to the
+   * `X-OpenClaw-Agent-Id` header per the plugin's convention.
+   */
+  mode?: RuntimeMode;
+  /**
+   * Optional session-key partition. Only honoured in `"clawg-ui"` mode
+   * and only when the value matches the plugin's validation regex (see
+   * `clawgUiUrl.ts#SESSION_KEY_RE`).
+   */
+  sessionKey?: string;
 }
 
 /**
@@ -124,8 +147,29 @@ export interface RunAgentOptions {
  */
 export async function runAgent(opts: RunAgentOptions): Promise<void> {
   const fetchImpl: typeof fetch = opts.fetchImpl ?? globalThis.fetch;
-  const url = buildRunUrl(opts.runtimeUrl, opts.agentId);
-  const headers = buildRuntimeHeaders(opts.token);
+  const mode: RuntimeMode = opts.mode ?? 'p05c';
+  // Two modes share the same SSE pump but differ in URL + header shape.
+  // We resolve both through one helper so the call site stays uniform
+  // and `runAgent` itself doesn't grow per-mode branches.
+  let url: string;
+  let headers: Record<string, string>;
+  if (mode === 'clawg-ui') {
+    const resolved = resolveRuntimeRequest({
+      mode: 'clawg-ui',
+      agentId: opts.agentId,
+      clawgUiBaseUrl: opts.runtimeUrl,
+      clawgUiDeviceToken: opts.token,
+      ...(opts.sessionKey !== undefined ? { sessionKey: opts.sessionKey } : {}),
+    });
+    url = resolved.url;
+    headers = resolved.headers;
+  } else {
+    // P05C — keep the explicit `buildRunUrl` + `buildRuntimeHeaders`
+    // calls so the stub-mode wire format is unchanged + the existing
+    // test assertions stay valid.
+    url = buildRunUrl(opts.runtimeUrl, opts.agentId);
+    headers = buildRuntimeHeaders(opts.token);
+  }
   const res = await fetchImpl(url, {
     method: 'POST',
     headers,

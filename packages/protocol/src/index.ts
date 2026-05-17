@@ -21,7 +21,9 @@ export type {
   Message,
   MessageInput,
   ThreadEvent,
+  ClawgUiPairingState,
 } from './types';
+export { CLAWG_UI_PAIRING_STATE_TOPIC } from './types';
 
 export {
   TokenSchema,
@@ -33,6 +35,7 @@ export {
   MessageSchema,
   MessageInputSchema,
   ThreadEventSchema,
+  ClawgUiPairingStateSchema,
 } from './schemas';
 
 export type { Envelope } from './envelope';

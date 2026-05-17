@@ -132,6 +132,7 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
             token: session.token,
             ...(session.runtimeUrl ? { runtimeUrl: session.runtimeUrl } : {}),
             ...(session.httpBase ? { httpBase: session.httpBase } : {}),
+            ...(session.clawgUiBaseUrl ? { clawgUiBaseUrl: session.clawgUiBaseUrl } : {}),
           });
         }
       } catch (err) {
@@ -203,6 +204,10 @@ export function PairingProvider({ children, gateway }: PairingProviderProps): Re
         token,
         ...(approved.runtimeUrl ? { runtimeUrl: approved.runtimeUrl } : {}),
         ...(httpBase ? { httpBase } : {}),
+        // Q46: persist the clawg-ui base URL alongside runtimeUrl /
+        // httpBase so a restart of the mobile app doesn't lose the
+        // daemon address.
+        ...(approved.clawgUiBaseUrl ? { clawgUiBaseUrl: approved.clawgUiBaseUrl } : {}),
       };
       await savePairingSession(session);
       dispatch({

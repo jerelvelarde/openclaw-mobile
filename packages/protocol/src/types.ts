@@ -33,6 +33,20 @@ export interface PairingApproved {
   token: Token;
   /** URL the mobile app should hit for CopilotKit runtime calls. */
   runtimeUrl: string;
+  /**
+   * Optional base URL for the upstream `openclaw gateway` daemon when the
+   * desktop is running in `gateway_mode: "clawg-ui"` (P11A/P11B). When
+   * present, mobile chat in clawg-ui mode targets `<clawgUiBaseUrl>/v1/clawg-ui`
+   * (per `vendor/clawg-ui/README.md:39-77`) rather than the desktop's
+   * adapter. Defaults to `<httpBase host>:18789` (co-located deployment) but
+   * is persisted as a discrete value so split-topology users (desktop on
+   * laptop, daemon on home server) can override without rebuilding mobile.
+   *
+   * Optional for backward compatibility with older desktop builds that
+   * don't advertise it; mobile falls back to deriving it from `httpBase`
+   * when absent. Closes open question #46.
+   */
+  clawgUiBaseUrl?: string;
 }
 
 /**
@@ -107,3 +121,33 @@ export type ThreadEvent =
 // `VoiceOpts` + `VoiceSession` live in `./voice/types.ts` as of P07.0.
 // Both are re-exported from `./index.ts` so consumers see the same import
 // path they did before.
+
+// ── clawg-ui pairing (P11B) ─────────────────────────────────────────────────
+
+/**
+ * State of the desktop's wrap of `clawg-ui`'s device-pairing flow
+ * (`vendor/clawg-ui/README.md` §"Authentication"). When the desktop's
+ * runtime client POSTs to `/v1/clawg-ui` without auth, the gateway plugin
+ * returns a `403 pairing_pending` carrying a `pairingCode` + a `token`.
+ * The desktop surfaces the code in a tray/Settings banner; the user
+ * clicks Approve, which shells out to
+ * `openclaw pairing approve clawg-ui <pairingCode>` on the gateway host.
+ *
+ * Mobile observes the state via the existing pairing channel so the
+ * "(pairing)/awaiting-gateway" intermediate screen can show the same
+ * code the desktop is asking the user to approve.
+ *
+ * This is the *second* trust layer the desktop manages on the user's
+ * behalf (the first being our own Ed25519 6-digit pairing in P03B). The
+ * two are deliberately decoupled — `"stub"` gateway mode never produces
+ * a `ClawgUiPairingState` event.
+ */
+export type ClawgUiPairingState =
+  | { status: 'idle' }
+  | { status: 'pending'; pairingCode: string }
+  | { status: 'approved' }
+  | { status: 'denied'; reason?: string }
+  | { status: 'error'; message: string };
+
+/** Topic name used to broadcast `ClawgUiPairingState` changes to peers. */
+export const CLAWG_UI_PAIRING_STATE_TOPIC = 'system:clawg-ui-pairing-state' as const;
