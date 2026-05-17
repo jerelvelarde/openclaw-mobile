@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1.7
+#
+# E2E gateway image (P11E).
+#
+# Stands up a runnable `openclaw gateway` with the vendored
+# `@contextableai/clawg-ui` plugin pre-installed and a minimal
+# config that exposes the `main` agent for the scripted scenario.
+#
+# Install path:
+#   - `openclaw` itself is installed via `npm install -g openclaw`
+#     (the upstream-canonical path per `.chalk/openclaw-upstream.md`
+#     §1.1, which cites the `openclaw.mjs` shim launching
+#     `dist/index.js` after a global install). If a published `openclaw`
+#     package isn't available on the public npm registry at run time,
+#     the build will fail here loudly — see `e2e/README.md` "Known
+#     gaps" for the manual escape hatch.
+#   - `@contextableai/clawg-ui` is installed from the **vendored
+#     tarball** built off `vendor/clawg-ui/` at the repo root. We
+#     deliberately do NOT pull from the npm registry for the plugin so
+#     this image always tests against the exact bytes we pinned at
+#     v0.7.0 in `.gitmodules`. The build context is the repo root; the
+#     vendored tree is copied in and `npm pack`'d, then the resulting
+#     tarball is installed via `openclaw plugins install <tarball>`.
+#
+# Build context: the repo root (i.e. one directory up from this file's
+# parent). The compose file passes the correct context; if you build
+# this Dockerfile by hand, run `docker build -f
+# e2e/docker/Dockerfile.openclaw-gateway .` from the repo root.
+
+ARG NODE_VERSION=22.16
+FROM node:${NODE_VERSION}-bookworm-slim AS builder
+
+# We need `curl` for the healthcheck (the slim image omits it) and
+# `git` because the vendored clawg-ui's npm-pack step touches a
+# subrepo. Keep this layer thin; everything else is npm-installed.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Install openclaw gateway --------------------------------------------
+# `openclaw` is the upstream npm package name (peer-dep'd by
+# `vendor/clawg-ui/package.json:35`). The CLI binary it installs is
+# `openclaw` per `.chalk/openclaw-upstream.md` §1.1.
+#
+# If this RUN fails because the package isn't actually published on
+# npm under that name, the failure surfaces here cleanly; document the
+# fallback in `e2e/README.md`.
+RUN npm install -g openclaw
+
+# ---- Pack the vendored clawg-ui ------------------------------------------
+WORKDIR /build/clawg-ui
+COPY vendor/clawg-ui/ ./
+# Only build + pack; do NOT install transitive dev deps if a lockfile
+# is present.
+RUN npm install --omit=optional \
+    && npm run build \
+    && npm pack \
+    && mv contextableai-clawg-ui-*.tgz /tmp/clawg-ui.tgz
+
+# ---- Install clawg-ui as an openclaw plugin -------------------------------
+# `openclaw plugins install <tarball>` is the canonical path per
+# `vendor/clawg-ui/README.md:33`. Passing a local tarball matches the
+# pattern documented at the same line; the README's `npm`-name form is
+# equivalent.
+RUN openclaw plugins install /tmp/clawg-ui.tgz
+
+# ---- Stage the runtime workspace + config --------------------------------
+# `~/.openclaw/` is the daemon's state root (see
+# `.chalk/openclaw-upstream.md` §1.2).
+RUN mkdir -p /root/.openclaw/workspace/skills/echo
+COPY e2e/docker/openclaw-config.json /root/.openclaw/openclaw.json
+COPY e2e/docker/echo-agent.md /root/.openclaw/workspace/AGENTS.md
+COPY e2e/docker/echo-agent.md /root/.openclaw/workspace/skills/echo/SKILL.md
+
+# Default secret — never leaves the container; documented as such in
+# `e2e/README.md`.
+ENV OPENCLAW_GATEWAY_SECRET=e2e-fixed-secret-do-not-reuse
+ENV OPENCLAW_PROFILE=default
+ENV NODE_ENV=production
+
+EXPOSE 18789
+
+# Health probe used by docker-compose. Matches the `/health` endpoint
+# documented at `.chalk/openclaw-upstream.md` §2.1.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=15s --retries=20 \
+    CMD curl -fsS http://127.0.0.1:18789/health || exit 1
+
+ENTRYPOINT ["openclaw", "gateway", "--port", "18789"]

@@ -1,0 +1,113 @@
+# E2E gateway integration (P11E).
+#
+# Brings up the openclaw gateway container (with the vendored clawg-ui
+# plugin installed), waits for /health to return 200, then runs the
+# scripted pair → approve → chat driver and uploads the JSON report.
+#
+# This workflow is intentionally NOT a required check on `ci.yml` —
+# the build is slow + has external dependencies (npm registry
+# availability for `openclaw`). Triggers:
+#   - `workflow_dispatch` for manual runs.
+#   - `schedule: cron '0 7 * * *'` (~midnight Pacific) for the nightly
+#     canary.
+
+name: E2E (clawg-ui)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *'
+
+# At most one E2E run at a time per ref — keeps the GitHub-hosted
+# runner from doing duplicate work if the scheduled run overlaps with
+# a manual dispatch.
+concurrency:
+  group: e2e-clawg-ui-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: E2E pair → chat against real gateway
+    runs-on: ubuntu-latest
+    # Hard cap so a stuck container doesn't burn the runner minutes
+    # quota on a nightly failure.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout (with submodules)
+        # `vendor/clawg-ui` is a submodule; the Dockerfile COPYs from
+        # it so we MUST fetch it here.
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          # Version is read from root package.json `packageManager`.
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build gateway image
+        # Build the image up front so its docker-build cost shows up in
+        # a dedicated step (easier triage when nightly fails on the
+        # build vs the run).
+        run: docker compose -f e2e/docker/docker-compose.yml build
+
+      - name: Start gateway
+        run: docker compose -f e2e/docker/docker-compose.yml up -d
+
+      - name: Wait for /health
+        # Poll up to ~60s for the container's healthcheck to flip to
+        # `healthy`. The Dockerfile's HEALTHCHECK is what actually
+        # probes /health; we just observe its status.
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' openclaw-gateway-e2e 2>/dev/null || echo "missing")
+            if [ "$status" = "healthy" ]; then
+              echo "gateway healthy after ${i}s"
+              exit 0
+            fi
+            echo "[$i] status=$status"
+            sleep 1
+          done
+          echo "gateway did not become healthy within 60s"
+          docker compose -f e2e/docker/docker-compose.yml logs gateway || true
+          exit 1
+
+      - name: Run E2E driver
+        run: pnpm e2e:clawg-ui
+
+      - name: Upload report
+        # `always()` so we get the report even on driver failures —
+        # debugging needs it more then than on success.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: e2e-report.json
+          if-no-files-found: warn
+
+      - name: Upload gateway logs
+        if: failure()
+        run: docker compose -f e2e/docker/docker-compose.yml logs gateway > gateway.log 2>&1 || true
+
+      - name: Upload gateway logs artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-logs
+          path: gateway.log
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f e2e/docker/docker-compose.yml down --volumes

@@ -63,3 +63,7 @@ android/local.properties
 # Native
 *.keystore
 !debug.keystore
+
+# E2E run artifact (P11E) — written by `scripts/e2e/run.ts`.
+e2e-report.json
+e2e/docker/gateway.log

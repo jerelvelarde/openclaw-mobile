@@ -1,0 +1,15 @@
+{
+  "$comment": "Minimal openclaw.json for the P11E e2e image. See `.chalk/openclaw-upstream.md` §1.2 for the file path (`~/.openclaw/openclaw.json`). The runtime defaults already cover the bits we don't need to override for the test scenario — TLS off, bonjour off (single-container, no LAN discovery needed), gateway secret sourced from OPENCLAW_GATEWAY_SECRET via the env. Only `agents.main` is declared explicitly so the X-OpenClaw-Agent-Id: main header in scripts/e2e/driver.ts routes deterministically.",
+  "gateway": {
+    "port": 18789,
+    "tls": { "enabled": false },
+    "bonjour": { "enabled": false }
+  },
+  "agents": {
+    "main": {
+      "id": "main",
+      "kind": "echo",
+      "$comment": "Stub agent; the implementation lives in `e2e/docker/echo-agent.md` and is loaded by the workspace runtime. Keeps the test deterministic without an LLM. See `e2e/README.md` 'Known gaps' for what happens if the upstream gateway doesn't recognise kind=echo."
+    }
+  }
+}

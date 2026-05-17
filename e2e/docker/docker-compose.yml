@@ -1,0 +1,32 @@
+# Compose file for the P11E end-to-end harness.
+#
+# Single service: the openclaw gateway with the vendored clawg-ui
+# plugin installed. Exposes 18789 on localhost so the driver script in
+# `scripts/e2e/run.ts` can hit it via `http://localhost:18789`.
+#
+# Build context is the repo root (`../..`) because the Dockerfile
+# needs to COPY `vendor/clawg-ui/` into the build stage.
+#
+# Healthcheck is defined in the Dockerfile; the driver's wrapper
+# script (`pnpm e2e:clawg-ui:local`) waits for the container's health
+# status to be `healthy` before invoking the scenario.
+
+services:
+  gateway:
+    build:
+      context: ../..
+      dockerfile: e2e/docker/Dockerfile.openclaw-gateway
+    container_name: openclaw-gateway-e2e
+    # Bind to localhost only — this image is not meant to be reachable
+    # from anywhere except the test runner on the same host.
+    ports:
+      - '127.0.0.1:18789:18789'
+    environment:
+      # Echoed in the Dockerfile; declared here too so a `docker
+      # compose run --rm gateway env` reveals it explicitly.
+      OPENCLAW_GATEWAY_SECRET: e2e-fixed-secret-do-not-reuse
+      OPENCLAW_PROFILE: default
+    # `init: true` reaps zombie children from any spawn the gateway
+    # performs (Hermes ACP child, etc.). Cheap insurance.
+    init: true
+    restart: 'no'
