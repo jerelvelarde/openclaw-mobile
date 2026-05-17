@@ -29,9 +29,8 @@ import { dirname, join } from 'node:path';
  * error in that mode until follow-up plans (P11C) land.
  *
  * Legacy persisted values of `"real"` migrate forward to `"clawg-ui"`
- * on read; see {@link coerceGatewayMode}. The legacy WebSocket
- * `OpenClawBridge` (P10A) is `@deprecated` and scheduled for removal in
- * P11D.
+ * on read; see {@link coerceGatewayMode}. The legacy P10A WebSocket
+ * translator that originally backed `"real"` was deleted in P11D.
  */
 export type GatewayMode = 'stub' | 'clawg-ui';
 
@@ -65,8 +64,7 @@ export const DEFAULT_SETTINGS: SettingsFile = {
  *   - `"stub"`     → `"stub"` (unchanged)
  *   - `"clawg-ui"` → `"clawg-ui"` (current real-mode value)
  *   - `"real"` / `"realgateway"` → `"clawg-ui"` (legacy P10A bridge values
- *     migrate forward; the bridge is `@deprecated` per P11A, removed in
- *     P11D)
+ *     migrate forward; the bridge itself was removed in P11D)
  *   - anything else, including missing/non-string → `DEFAULT_SETTINGS.gateway_mode`
  *
  * Returning the migrated value here means a re-write of `settings.json`
@@ -76,7 +74,9 @@ export const DEFAULT_SETTINGS: SettingsFile = {
 export function coerceGatewayMode(v: unknown): GatewayMode {
   if (v === 'stub') return 'stub';
   if (v === 'clawg-ui') return 'clawg-ui';
-  // Legacy P10A values — silently migrate forward. We deliberately don't
+  // Legacy P10A values — silently migrate forward. The bridge that
+  // originally backed `"real"` was removed in P11D, but pre-existing
+  // installs may still have the string on disk. We deliberately don't
   // log this; settings.ts is constructed often in tests + IPC handlers
   // and the noise isn't worth it. `gateway_mode` is restart-only, so the
   // migration is observed at boot and immediately persisted on the next

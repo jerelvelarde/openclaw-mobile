@@ -38,7 +38,11 @@ import {
   attachClawgUiUnsupportedSurfaces,
   type ClawgUiUnsupportedAttachment,
 } from './gateway/clawg-ui-unsupported';
-import { openClawgUiIdentityStore, type ClawgUiIdentityHandle } from './clawg-ui/identity';
+import {
+  openClawgUiIdentityStore,
+  runLegacyBridgeKeystoreCleanup,
+  type ClawgUiIdentityHandle,
+} from './clawg-ui/identity';
 import { registerCopilotRuntime } from './copilot/runtime';
 import { createVoiceRouter, type VoiceRouter } from './voice/router';
 import { loadWrtcDeps } from './voice/peer';
@@ -57,9 +61,9 @@ let pairing: PairingController | null = null;
 let bonjour: BonjourPublisher | null = null;
 let wsTransport: WsTransport | null = null;
 let stubGateway: StubGateway | null = null;
-// P11A: clawg-ui-mode plumbing. The legacy `openClawBridge` slot was
-// removed when `attachOpenClawBridge` stopped being called (the bridge
-// is `@deprecated`; final removal lands in P11D).
+// P11A: clawg-ui-mode plumbing. The legacy P10A bridge slot that lived
+// here was removed when the bridge stopped being called, and the bridge
+// module itself was deleted in P11D.
 let clawgUiUnsupported: ClawgUiUnsupportedAttachment | null = null;
 let clawgUiIdentities: ClawgUiIdentityHandle | null = null;
 let router: Router | null = null;
@@ -228,6 +232,25 @@ async function bootPairing(): Promise<void> {
 
   await pairing.server.fastify.listen({ host, port: PORT });
 
+  // ---- Legacy bridge keystore cleanup (P11D) ----------------------------
+  // The P10A real-gateway bridge minted three keystore entries on first
+  // connect (its Ed25519 keypair + the upstream-issued device token).
+  // P11D deleted the bridge module; those entries are now dead weight.
+  // Fire a one-shot wipe on every launch — the second run is a no-op.
+  // We don't gate on `gateway_mode`: the entries are orphaned in both
+  // `stub` and `clawg-ui`.
+  try {
+    const cleanupKeystore = await openKeystore(app.getPath('userData'));
+    const removed = await runLegacyBridgeKeystoreCleanup(cleanupKeystore);
+    if (removed.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`[openclaw] P11D keystore cleanup removed: ${removed.join(', ')}`);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[openclaw] P11D keystore cleanup failed (ignored):', err);
+  }
+
   // ---- WS transport + gateway plumbing ----------------------------------
   // `gateway_mode` selects between two paths:
   //
@@ -245,8 +268,8 @@ async function bootPairing(): Promise<void> {
   //     (a) the persistent per-gateway device-token store and (b) a
   //     small router shim that replies with `unsupportedInRealMode` for
   //     canvas / voice / `agents.setActive` (since clawg-ui is
-  //     chat-only). The legacy P10A `OpenClawBridge` is `@deprecated`
-  //     and no longer instantiated here — removal lands in P11D.
+  //     chat-only). The legacy P10A bridge that used to live in this
+  //     branch was deleted in P11D.
   //
   // The flip is restart-only; see the Settings page.
   router = createRouter();

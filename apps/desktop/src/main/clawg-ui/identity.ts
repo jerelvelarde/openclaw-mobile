@@ -31,6 +31,21 @@ import type { Keystore } from '../pair/keystore';
 /** Account name (under `KEYSTORE_SERVICE`) that holds the JSON envelope. */
 export const CLAWG_UI_IDENTITIES_ACCOUNT = 'clawgUiIdentities';
 
+/**
+ * Account names the deleted P10A real-gateway bridge used to write to
+ * the keystore (the bridge module + its handshake helper were removed
+ * in P11D). The bridge minted an Ed25519 keypair + a gateway-issued
+ * device token at first connect; with the bridge gone those entries are
+ * orphaned. We list them here so the one-shot
+ * {@link runLegacyBridgeKeystoreCleanup} migration can wipe them on the
+ * next boot of a Wave 15 build.
+ */
+export const LEGACY_BRIDGE_KEYSTORE_ACCOUNTS = [
+  'bridge-upstream-key',
+  'bridge-upstream-device-id',
+  'bridge-upstream-device-token',
+] as const;
+
 /** A single clawg-ui device identity, keyed by `host:port`. */
 export interface ClawgUiIdentity {
   /** Upstream daemon host (matches the value in `settings.gateway_host`). */
@@ -125,6 +140,33 @@ export interface ClawgUiIdentityHandle {
   remove(host: string, port: number): Promise<void>;
   /** List every persisted identity, sorted by `host:port`. */
   list(): Promise<ClawgUiIdentity[]>;
+}
+
+/**
+ * One-shot migration helper: attempt to delete every legacy P10A bridge
+ * account from the keystore. Returns the list of accounts that actually
+ * had an entry (useful for logging). Errors are swallowed — these tokens
+ * have no security value beyond their original purpose (they were proofs
+ * to the upstream `openclaw gateway` daemon that the bridge had paired),
+ * and a stale keystore entry isn't worth crashing the boot path over.
+ *
+ * Call once per process at the start of `bootPairing` (whichever
+ * `gateway_mode` the user picked — the entries are dead either way). The
+ * call is idempotent: on a clean keystore it does nothing.
+ */
+export async function runLegacyBridgeKeystoreCleanup(keystore: Keystore): Promise<string[]> {
+  const removed: string[] = [];
+  for (const account of LEGACY_BRIDGE_KEYSTORE_ACCOUNTS) {
+    try {
+      const deleted = await keystore.deleteSecret(account);
+      if (deleted) removed.push(account);
+    } catch {
+      // Swallow — see the doc comment above. We don't even surface this
+      // through a logger because the migration runs once per upgrade and
+      // any failure is benign.
+    }
+  }
+  return removed;
 }
 
 /**
